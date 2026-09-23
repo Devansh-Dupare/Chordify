@@ -35,6 +35,23 @@ namespace test
         return std::sqrt (sum / (double) std::max<size_t> (1, end - start));
     }
 
+    // Level in dB of one frequency component (Goertzel), as the amplitude of a matching sine
+    inline double toneDb (std::span<const float> signal, size_t start, size_t length, double freq, double sampleRate)
+    {
+        const auto w = 2.0 * std::numbers::pi * freq / sampleRate;
+        const auto c = 2.0 * std::cos (w);
+        double s1 = 0.0, s2 = 0.0;
+        const auto end = std::min (signal.size(), start + length);
+        for (auto i = start; i < end; ++i)
+        {
+            const auto s0 = signal[i] + c * s1 - s2;
+            s2 = s1;
+            s1 = s0;
+        }
+        const auto magnitude = std::sqrt (std::max (0.0, s1 * s1 + s2 * s2 - c * s1 * s2)) * 2.0 / (double) (end - start);
+        return 20.0 * std::log10 (std::max (magnitude, 1.0e-12));
+    }
+
     // Frequency from linearly-interpolated upward zero crossings
     inline double zeroCrossingFrequency (std::span<const float> signal, double sampleRate)
     {

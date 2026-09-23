@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <span>
 
 namespace chordify
@@ -37,7 +38,10 @@ namespace chordify
 
     // Chord tones from the internal root + chord type parameters (all gated). Voices that were
     // part of the previous chord but not this one keep their note, released, so they ring out.
-    Voices internalChord (int rootNote, int chordType, const Voices& previous);
+    Voices internalChord (float rootNote, int chordType, const Voices& previous);
+
+    // Every voice released (keeping its pitch), so the chord rings out
+    Voices releaseAll (Voices voices);
 
     // Assigns incoming MIDI notes to voices with last-note priority: once every voice is held,
     // a new note steals the voice held the longest. Otherwise it takes a never-used voice, or
@@ -55,6 +59,9 @@ namespace chordify
         static constexpr float bendRangeSemitones = 2.0f;
 
         Voices getVoices() const;
+
+        // The most recently pressed note that is still held, with pitch bend applied
+        std::optional<float> lastHeldNote() const;
 
     private:
         struct Slot

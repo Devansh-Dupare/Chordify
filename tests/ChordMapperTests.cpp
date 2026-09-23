@@ -67,6 +67,14 @@ TEST_CASE ("Internal chords", "[chordmapper]")
         CHECK (triad[3].note == 71.0f);
     }
 
+    SECTION ("releasing a chord keeps its pitches")
+    {
+        const auto released = releaseAll (internalChord (60, 0, none));
+        CHECK (released[2].used);
+        CHECK_FALSE (released[2].gated);
+        CHECK (released[2].note == 67.0f);
+    }
+
     SECTION ("out of range chord types are clamped")
     {
         CHECK (chordIntervals (-1).size() == 3);
@@ -133,6 +141,20 @@ TEST_CASE ("Voice allocation", "[chordmapper]")
         allocator.allNotesOff();
         for (const auto& v : allocator.getVoices())
             CHECK_FALSE (v.gated);
+    }
+
+    SECTION ("the last held note is tracked for MIDI Root mode")
+    {
+        CHECK_FALSE (allocator.lastHeldNote().has_value());
+        allocator.noteOn (60);
+        allocator.noteOn (65);
+        CHECK (allocator.lastHeldNote() == 65.0f);
+        allocator.noteOff (65);
+        CHECK (allocator.lastHeldNote() == 60.0f); // falls back to the key still held
+        allocator.setPitchBend (0.5f);
+        CHECK (allocator.lastHeldNote() == 61.0f);
+        allocator.noteOff (60);
+        CHECK_FALSE (allocator.lastHeldNote().has_value());
     }
 
     SECTION ("pitch bend shifts every voice by up to two semitones")

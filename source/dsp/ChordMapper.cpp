@@ -44,7 +44,7 @@ namespace chordify
         return chordTable[std::clamp (chordType, 0, (int) std::size (chordTable) - 1)];
     }
 
-    Voices internalChord (int rootNote, int chordType, const Voices& previous)
+    Voices internalChord (float rootNote, int chordType, const Voices& previous)
     {
         const auto intervals = chordIntervals (chordType);
 
@@ -52,10 +52,17 @@ namespace chordify
         for (size_t i = 0; i < voices.size(); ++i)
         {
             if (i < intervals.size())
-                voices[i] = { (float) (rootNote + intervals[i]), true, true };
+                voices[i] = { rootNote + (float) intervals[i], true, true };
             else if (previous[i].used)
                 voices[i] = { previous[i].note, true, false }; // dropped chord tone rings out
         }
+        return voices;
+    }
+
+    Voices releaseAll (Voices voices)
+    {
+        for (auto& voice : voices)
+            voice.gated = false;
         return voices;
     }
 
@@ -123,6 +130,18 @@ namespace chordify
             if (slots[i].note >= 0)
                 voices[i] = { (float) slots[i].note + pitchBend * bendRangeSemitones, true, slots[i].gated };
         return voices;
+    }
+
+    std::optional<float> VoiceAllocator::lastHeldNote() const
+    {
+        const Slot* latest = nullptr;
+        for (const auto& slot : slots)
+            if (slot.gated && (latest == nullptr || slot.age > latest->age))
+                latest = &slot;
+
+        if (latest == nullptr)
+            return std::nullopt;
+        return (float) latest->note + pitchBend * bendRangeSemitones;
     }
 
     //==============================================================================

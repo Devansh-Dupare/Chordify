@@ -27,8 +27,8 @@ namespace chordify
 
         // Each resonator passes only a few Hz of a broadband input, so the wet signal needs fixed
         // makeup gain to sit near the input level. Calibrated with the Render harness: pink noise
-        // at default settings comes out at roughly the same RMS as it goes in.
-        static constexpr float makeupGain = 40.0f; // +32 dB
+        // at default settings (Excite 100%) comes out at roughly the same RMS as it goes in.
+        static constexpr float makeupGain = 22.0f; // +27 dB
 
         // The wet signal is soft-limited above this level (-1 dBFS), approaching 1.0 asymptotically
         static constexpr float limiterThreshold = 0.891f;
