@@ -9,7 +9,7 @@ TEST_CASE ("Factory presets", "[presets]")
     const auto& presets = params::factoryPresets();
 
     CHECK (plugin.getNumPrograms() == (int) presets.size());
-    CHECK (plugin.getNumPrograms() >= 8);
+    CHECK (plugin.getNumPrograms() == 7);
     CHECK (plugin.getProgramName (0) == "Default");
 
     SECTION ("every preset names real parameters with in-range values")
@@ -41,6 +41,20 @@ TEST_CASE ("Factory presets", "[presets]")
         CHECK (tree.getRawParameterValue (params::id::decay)->load() == Catch::Approx (10.0f));
         plugin.setCurrentProgram (0);
         CHECK (tree.getRawParameterValue (params::id::decay)->load() == Catch::Approx (1.5f));
+    }
+
+    SECTION ("presets change the sound, never the chord")
+    {
+        ChordSlots::Notes notes;
+        notes[62] = notes[65] = notes[69] = true;
+        plugin.getChordSlots().setPiano (notes);
+        plugin.getChordSlots().setSlot (0, notes);
+        tree.getParameter (params::id::chordSlot)->setValueNotifyingHost (tree.getParameter (params::id::chordSlot)->convertTo0to1 (1.0f));
+
+        plugin.setCurrentProgram (1);
+        CHECK (plugin.getChordSlots().getPiano() == notes);
+        CHECK (plugin.getChordSlots().getSlot (0) == notes);
+        CHECK (juce::roundToInt (tree.getRawParameterValue (params::id::chordSlot)->load()) == 1);
     }
 
     SECTION ("the chosen preset survives save and restore")

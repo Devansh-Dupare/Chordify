@@ -16,6 +16,14 @@ namespace
         auto* param = plugin.getParameterTree().getParameter (paramId);
         param->setValueNotifyingHost (param->convertTo0to1 (value));
     }
+
+    ChordSlots::Notes chord (std::initializer_list<int> notes)
+    {
+        ChordSlots::Notes result;
+        for (auto n : notes)
+            result[(size_t) n] = true;
+        return result;
+    }
 }
 
 TEST_CASE ("Parameter layout", "[params]")
@@ -24,34 +32,23 @@ TEST_CASE ("Parameter layout", "[params]")
 
     SECTION ("every parameter is exposed to the host")
     {
-        for (auto* paramId : { params::id::engine, params::id::chordSource, params::id::root, params::id::chordType,
-                 params::id::harmonics, params::id::detune, params::id::spread, params::id::glide, params::id::decay,
-                 params::id::excite, params::id::brightness, params::id::timbre, params::id::mix, params::id::inputHpf, params::id::tone, params::id::output })
+        for (auto* paramId : { params::id::chordSlot, params::id::harmonics, params::id::detune, params::id::spread, params::id::glide,
+                 params::id::decay, params::id::excite, params::id::brightness, params::id::timbre, params::id::mix, params::id::inputHpf,
+                 params::id::tone, params::id::output })
         {
             INFO (paramId);
             CHECK (plugin.getParameterTree().getParameter (paramId) != nullptr);
         }
-        CHECK (plugin.getParameters().size() == 16);
+        CHECK (plugin.getParameters().size() == 13);
     }
 
     SECTION ("defaults")
     {
-        CHECK (valueOf (plugin, params::id::engine) == 0.0f);
-        CHECK (valueOf (plugin, params::id::chordSource) == 0.0f);
-        CHECK (valueOf (plugin, params::id::root) == 48.0f);
+        CHECK (juce::roundToInt (valueOf (plugin, params::id::chordSlot)) == params::pianoSlot);
         CHECK (valueOf (plugin, params::id::harmonics) == 8.0f);
         CHECK (valueOf (plugin, params::id::decay) == Catch::Approx (1.5f));
         CHECK (valueOf (plugin, params::id::mix) == 100.0f);
         CHECK (valueOf (plugin, params::id::inputHpf) == 20.0f);
-    }
-
-    SECTION ("root displays as a note name and parses one back")
-    {
-        auto* root = plugin.getParameterTree().getParameter (params::id::root);
-        // Note names use middle C (60) = C3, as Ableton and Logic do
-        CHECK (root->getCurrentValueAsText() == "C2");
-        CHECK (root->convertFrom0to1 (root->getValueForText ("F#2")) == 54.0f);
-        CHECK (root->convertFrom0to1 (root->getValueForText ("60")) == 60.0f);
     }
 }
 
@@ -60,72 +57,32 @@ TEST_CASE ("State save and restore", "[params]")
     juce::MemoryBlock state;
     {
         PluginProcessor plugin;
-        setValue (plugin, params::id::chordType, 7.0f);
+        setValue (plugin, params::id::chordSlot, 3.0f);
         setValue (plugin, params::id::decay, 4.25f);
-        setValue (plugin, params::id::root, 55.0f);
+        setValue (plugin, params::id::harmonics, 12.0f);
         plugin.getStateInformation (state);
     }
 
     PluginProcessor restored;
     restored.setStateInformation (state.getData(), (int) state.getSize());
-    CHECK (valueOf (restored, params::id::chordType) == 7.0f);
+    CHECK (valueOf (restored, params::id::chordSlot) == 3.0f);
     CHECK (valueOf (restored, params::id::decay) == Catch::Approx (4.25f).margin (0.001f));
-    CHECK (valueOf (restored, params::id::root) == 55.0f);
+    CHECK (valueOf (restored, params::id::harmonics) == 12.0f);
 
     SECTION ("garbage state is ignored")
     {
         const char junk[] = "not a plugin state";
         restored.setStateInformation (junk, (int) sizeof (junk));
-        CHECK (valueOf (restored, params::id::root) == 55.0f);
+        CHECK (valueOf (restored, params::id::harmonics) == 12.0f);
     }
 }
 
-TEST_CASE ("MIDI input", "[midi]")
+TEST_CASE ("Chordify is a plain audio effect", "[params]")
 {
     PluginProcessor plugin;
-    CHECK (plugin.acceptsMidi());
+    CHECK_FALSE (plugin.acceptsMidi());
     CHECK_FALSE (plugin.isMidiEffect());
-
-    constexpr int blockSize = 64;
-    plugin.setPlayConfigDetails (2, 2, 48000.0, blockSize);
-    plugin.prepareToPlay (48000.0, blockSize);
-
-    juce::AudioBuffer<float> buffer (2, blockSize);
-    juce::Random random (42);
-    for (int ch = 0; ch < 2; ++ch)
-        for (int i = 0; i < blockSize; ++i)
-            buffer.setSample (ch, i, random.nextFloat() - 0.5f);
-
-    juce::MidiBuffer midi;
-    midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
-    midi.addEvent (juce::MidiMessage::noteOn (1, 64, (juce::uint8) 100), 10);
-    midi.addEvent (juce::MidiMessage::noteOn (1, 100, (juce::uint8) 100), 20);
-    plugin.processBlock (buffer, midi);
-
-    SECTION ("held notes are tracked across both 64-note words")
-    {
-        const auto held = plugin.getHeldNotes();
-        CHECK (held.count() == 3);
-        CHECK (held[60]);
-        CHECK (held[64]);
-        CHECK (held[100]);
-    }
-
-    SECTION ("note off and all-notes-off release notes")
-    {
-        midi.clear();
-        midi.addEvent (juce::MidiMessage::noteOff (1, 64), 0);
-        plugin.processBlock (buffer, midi);
-        CHECK (plugin.getHeldNotes().count() == 2);
-        CHECK_FALSE (plugin.getHeldNotes()[64]);
-
-        midi.clear();
-        midi.addEvent (juce::MidiMessage::allNotesOff (1), 0);
-        plugin.processBlock (buffer, midi);
-        CHECK (plugin.getHeldNotes().none());
-    }
-
-    plugin.releaseResources();
+    CHECK_FALSE (plugin.producesMidi());
 }
 
 TEST_CASE ("Editor opens with every control attached", "[editor]")
@@ -173,7 +130,7 @@ TEST_CASE ("Processor reports zero latency and a decay-length tail", "[latency]"
 namespace
 {
     // Renders a mono signal through the plugin (stereo in/out) and returns the left output
-    std::vector<float> renderThroughPlugin (PluginProcessor& plugin, const std::vector<float>& input, const juce::MidiBuffer& firstBlockMidi = {})
+    std::vector<float> renderThroughPlugin (PluginProcessor& plugin, const std::vector<float>& input)
     {
         constexpr int blockSize = 512;
         plugin.setPlayConfigDetails (2, 2, 48000.0, blockSize);
@@ -189,8 +146,6 @@ namespace
                 buffer.copyFrom (ch, 0, input.data() + start, n);
 
             juce::MidiBuffer midi;
-            if (start == 0)
-                midi = firstBlockMidi;
             plugin.processBlock (buffer, midi);
             std::copy_n (buffer.getReadPointer (0), n, out.begin() + (std::ptrdiff_t) start);
         }
@@ -262,30 +217,25 @@ TEST_CASE ("A pitched input produces the whole chord", "[chord]")
     }
 }
 
-TEST_CASE ("MIDI Root builds the chord type on the held key", "[chord]")
+TEST_CASE ("The notes picked are the notes that sound", "[chord]")
 {
-    // One held key (A2) with the chord type set to minor, then to major
-    auto render = [] (float chordType) {
+    // The same input through A minor (A2 C3 E3) and A major (A2 C#3 E3), picked as notes
+    auto render = [] (const ChordSlots::Notes& notes) {
         PluginProcessor plugin;
-        setValue (plugin, params::id::chordSource, (float) params::ChordSource::midiRoot);
-        setValue (plugin, params::id::chordType, chordType);
+        plugin.getChordSlots().setPiano (notes);
         setValue (plugin, params::id::detune, 0.0f);
         setValue (plugin, params::id::decay, 0.3f);
-
-        juce::MidiBuffer midi;
-        midi.addEvent (juce::MidiMessage::noteOn (1, 57, (juce::uint8) 100), 0);
-        return renderThroughPlugin (plugin, sawtooth (110.0, 8.0), midi);
+        return renderThroughPlugin (plugin, sawtooth (110.0, 8.0));
     };
 
-    const auto minor = render (1.0f);
-    const auto major = render (0.0f);
+    const auto minor = render (chord ({ 57, 60, 64 }));
+    const auto major = render (chord ({ 57, 61, 64 }));
 
-    // A minor = A2 C3 E3, all present at similar levels
     const auto minorTones = fundamentalLevels (minor, { 57, 60, 64 });
     INFO ("A2 " << minorTones[0] << " C3 " << minorTones[1] << " E3 " << minorTones[2]);
     CHECK (spreadDb (minorTones) < 8.0);
 
-    // The third follows the chord type: C3 in minor, C#3 in major. The absent third still
+    // The third follows the notes picked: C3 in minor, C#3 in major. The absent third still
     // measures some level, spilling from the neighbouring third's resonator a semitone away
     // (wide at this short decay), so 10 dB is a clear margin rather than a silence check.
     const auto c3 = 60, cSharp3 = 61;
@@ -308,25 +258,30 @@ TEST_CASE ("Output gain scales the final output", "[output]")
     CHECK (plugin.takeOutputPeaks()[0] == 0.0f); // reading resets the meter
 }
 
-TEST_CASE ("The sounding chord is published for the UI", "[chord]")
+TEST_CASE ("Chord Slot picks what plays", "[chord]")
 {
     PluginProcessor plugin;
-    setValue (plugin, params::id::root, 57.0f);
-    setValue (plugin, params::id::chordType, 1.0f); // A minor
-    renderThroughPlugin (plugin, std::vector<float> (1024, 0.0f));
+    auto& slots = plugin.getChordSlots();
+    slots.setPiano (chord ({ 57, 60, 64 }));
+    slots.setSlot (2, chord ({ 53, 57, 60, 64 }));
 
-    const auto notes = plugin.getChordNotes();
-    CHECK (notes.count() == 3);
-    CHECK (notes[57]);
-    CHECK (notes[60]);
-    CHECK (notes[64]);
-    CHECK (plugin.getChordRoot() == 57);
-
-    SECTION ("MIDI Root with no key held shows nothing")
+    SECTION ("Piano plays the piano selection")
     {
-        setValue (plugin, params::id::chordSource, (float) params::ChordSource::midiRoot);
+        renderThroughPlugin (plugin, std::vector<float> (1024, 0.0f));
+        CHECK (plugin.getChordNotes() == chord ({ 57, 60, 64 }));
+    }
+
+    SECTION ("a filled slot plays its chord")
+    {
+        setValue (plugin, params::id::chordSlot, 3.0f);
+        renderThroughPlugin (plugin, std::vector<float> (1024, 0.0f));
+        CHECK (plugin.getChordNotes() == chord ({ 53, 57, 60, 64 }));
+    }
+
+    SECTION ("an empty slot plays nothing")
+    {
+        setValue (plugin, params::id::chordSlot, 5.0f);
         renderThroughPlugin (plugin, std::vector<float> (1024, 0.0f));
         CHECK (plugin.getChordNotes().none());
-        CHECK (plugin.getChordRoot() == -1);
     }
 }

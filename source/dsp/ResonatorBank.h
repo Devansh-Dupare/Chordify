@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Engine.h"
+#include "ChordMapper.h"
 #include "Resonator.h"
 
 namespace chordify
@@ -11,7 +11,7 @@ namespace chordify
     // (exponentially, in log-frequency), smooths amplitudes and gates, recomputes coefficients,
     // and then linearly interpolates every coefficient and gain across the next interval.
     // Active slots are packed into contiguous lanes so the per-sample loop can auto-vectorise.
-    class ResonatorBank final : public Engine
+    class ResonatorBank
     {
     public:
         static constexpr int controlInterval = 32;
@@ -34,16 +34,16 @@ namespace chordify
         // The wet signal is soft-limited above this level (-1 dBFS), approaching 1.0 asymptotically
         static constexpr float limiterThreshold = 0.891f;
 
-        void prepare (double sampleRate) override;
-        void reset() override;
+        void prepare (double sampleRate);
+        void reset();
 
-        void setPartials (const PartialGrid& grid) override { target = grid; }
-        void setDecay (float t60Seconds) override { targetDecay = t60Seconds; }
-        void setGlide (float seconds) override { glideSeconds = seconds; }
+        void setPartials (const PartialGrid& grid) { target = grid; }
+        void setDecay (float t60Seconds) { targetDecay = t60Seconds; }
+        void setGlide (float seconds) { glideSeconds = seconds; }
 
-        void process (const float* input, float* outLeft, float* outRight, int numSamples) override;
+        void process (const float* input, float* outLeft, float* outRight, int numSamples);
 
-        int getLatencySamples() const override { return 0; }
+        int getLatencySamples() const { return 0; }
 
         int getNumActiveResonators() const { return numLanes; }
 

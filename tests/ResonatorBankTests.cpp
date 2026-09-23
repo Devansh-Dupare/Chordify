@@ -34,6 +34,14 @@ namespace
         return out;
     }
 
+    Voices majorTriad (int root, const Voices& previous = {})
+    {
+        std::bitset<128> notes;
+        for (auto interval : { 0, 4, 7 })
+            notes[(size_t) (root + interval)] = true;
+        return chordFromNotes (notes, previous);
+    }
+
     std::vector<float> noise (size_t length, float level = 0.25f)
     {
         juce::Random random (99);
@@ -57,7 +65,7 @@ TEST_CASE ("Resonator bank adds no latency", "[bank]")
 {
     ResonatorBank bank;
     bank.prepare (48000.0);
-    bank.setPartials (computePartials (internalChord (60, 0, {}), settingsFor (48000.0, 8)));
+    bank.setPartials (computePartials (majorTriad (60), settingsFor (48000.0, 8)));
     bank.setDecay (1.0f);
 
     std::vector<float> impulse (256, 0.0f);
@@ -145,11 +153,11 @@ TEST_CASE ("Chord changes are click-free", "[bank]")
 
     // C major -> F major (similar register, so steady-state levels match), one harmonic per note
     const auto settings = settingsFor (sampleRate, 1);
-    const auto cMajor = internalChord (60, 0, {});
+    const auto cMajor = majorTriad (60);
     bank.setPartials (computePartials (cMajor, settings));
     const auto before = render (bank, noise ((size_t) sampleRate));
 
-    bank.setPartials (computePartials (internalChord (65, 0, cMajor), settings));
+    bank.setPartials (computePartials (majorTriad (65, cMajor), settings));
     const auto after = render (bank, noise ((size_t) (0.5 * sampleRate)), 64);
 
     const auto steady = maxSecondDifference (before.left, (size_t) (0.5 * sampleRate), (size_t) (0.5 * sampleRate));

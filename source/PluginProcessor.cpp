@@ -19,9 +19,7 @@ PluginProcessor::~PluginProcessor()
 }
 
 PluginProcessor::ParameterValues::ParameterValues (juce::AudioProcessorValueTreeState& tree)
-    : chordSource (*tree.getRawParameterValue (params::id::chordSource)),
-      root (*tree.getRawParameterValue (params::id::root)),
-      chordType (*tree.getRawParameterValue (params::id::chordType)),
+    : chordSlot (*tree.getRawParameterValue (params::id::chordSlot)),
       harmonics (*tree.getRawParameterValue (params::id::harmonics)),
       detune (*tree.getRawParameterValue (params::id::detune)),
       spread (*tree.getRawParameterValue (params::id::spread)),
@@ -123,9 +121,6 @@ void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     currentSampleRate = sampleRate;
 
-    for (auto& word : heldNotes)
-        word.store (0, std::memory_order_relaxed);
-
     resonatorBank.prepare (sampleRate);
     exciter.setAmount (parameterValues.excite.load() / 100.0f);
     exciter.prepare (sampleRate);
@@ -133,13 +128,12 @@ void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     inputHighPass.prepare (sampleRate);
     tiltEq.setTone (parameterValues.tone.load() / 100.0f);
     tiltEq.prepare (sampleRate);
-    setLatencySamples (engine->getLatencySamples());
+    setLatencySamples (resonatorBank.getLatencySamples());
 
-    midiVoices.reset();
     chordVoices = {};
     lastPartialInputs.reset();
 
-    // Hosts may send larger blocks than announced; renderSegment splits those into pieces this size
+    // Hosts may send larger blocks than announced; processBlock splits those into pieces this size
     const auto blockSize = std::max (samplesPerBlock, 32);
     monoInput.setSize (1, blockSize);
     wetOutput.setSize (2, blockSize);
@@ -181,6 +175,8 @@ bool PluginProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                                               juce::MidiBuffer& midiMessages)
 {
+    juce::ignoreUnused (midiMessages);
+
     juce::ScopedNoDenormals noDenormals;
     auto totalNumInputChannels  = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
@@ -189,108 +185,18 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
-    updateHeldNotes (midiMessages);
-
-    // Render up to each MIDI event, then apply it, so chord changes are sample accurate
-    const auto numSamples = buffer.getNumSamples();
-    int position = 0;
-    for (const auto metadata : midiMessages)
-    {
-        const auto eventPosition = std::clamp (metadata.samplePosition, position, numSamples);
-        renderSegment (buffer, position, eventPosition - position);
-        handleMidiEvent (metadata.getMessage());
-        position = eventPosition;
-    }
-    renderSegment (buffer, position, numSamples - position);
-}
-
-void PluginProcessor::handleMidiEvent (const juce::MidiMessage& message)
-{
-    // Tracked in both chord source modes, so switching to MIDI picks up notes already held
-    if (message.isNoteOn())
-        midiVoices.noteOn (message.getNoteNumber());
-    else if (message.isNoteOff())
-        midiVoices.noteOff (message.getNoteNumber());
-    else if (message.isAllNotesOff() || message.isAllSoundOff())
-        midiVoices.allNotesOff();
-    else if (message.isPitchWheel())
-        midiVoices.setPitchBend ((float) (message.getPitchWheelValue() - 8192) / 8192.0f);
-}
-
-void PluginProcessor::updateEngine()
-{
-    const auto& p = parameterValues;
-
-    PartialInputs inputs;
-    const auto chordType = juce::roundToInt (p.chordType.load());
-    int root = -1;
-
-    switch ((params::ChordSource) juce::roundToInt (p.chordSource.load()))
-    {
-        case params::ChordSource::midi:
-            inputs.voices = midiVoices.getVoices();
-            break;
-
-        case params::ChordSource::midiRoot:
-            if (const auto heldRoot = midiVoices.lastHeldNote())
-            {
-                chordVoices = chordify::internalChord (*heldRoot, chordType, chordVoices);
-                root = juce::roundToInt (*heldRoot);
-            }
-            else
-                chordVoices = chordify::releaseAll (chordVoices); // no key held: let the chord ring out
-            inputs.voices = chordVoices;
-            break;
-
-        case params::ChordSource::internal:
-        default:
-            root = juce::roundToInt (p.root.load());
-            chordVoices = chordify::internalChord ((float) root, chordType, chordVoices);
-            inputs.voices = chordVoices;
-            break;
-    }
-
-    publishChord (inputs.voices, root);
-
-    inputs.settings.numHarmonics = juce::roundToInt (p.harmonics.load());
-    inputs.settings.brightness = p.brightness.load() / 100.0f;
-    inputs.settings.oddOnly = juce::roundToInt (p.timbre.load()) == 1;
-    inputs.settings.detuneCents = p.detune.load();
-    inputs.settings.spread = p.spread.load() / 100.0f;
-    inputs.settings.sampleRate = currentSampleRate;
-
-    if (inputs != lastPartialInputs)
-    {
-        engine->setPartials (chordify::computePartials (inputs.voices, inputs.settings));
-        lastPartialInputs = inputs;
-    }
-
-    exciter.setAmount (p.excite.load() / 100.0f);
-    inputHighPass.setCutoff (p.inputHpf.load());
-    tiltEq.setTone (p.tone.load() / 100.0f);
-    outputGainSmoothed.setTargetValue (outputGainFromDb (p.output.load()));
-    engine->setDecay (p.decay.load());
-    engine->setGlide (p.glide.load() / 1000.0f);
-    mixSmoothed.setTargetValue (p.mix.load() / 100.0f);
-}
-
-void PluginProcessor::renderSegment (juce::AudioBuffer<float>& buffer, int start, int numSamples)
-{
-    if (numSamples <= 0)
-        return;
-
     updateEngine();
 
-    const auto numInputs = std::min (getTotalNumInputChannels(), buffer.getNumChannels());
-    const auto numOutputs = std::min (getTotalNumOutputChannels(), buffer.getNumChannels());
+    const auto numSamples = buffer.getNumSamples();
+    const auto numInputs = std::min (totalNumInputChannels, buffer.getNumChannels());
+    const auto numOutputs = std::min (totalNumOutputChannels, buffer.getNumChannels());
     auto* mono = monoInput.getWritePointer (0);
     auto* wetLeft = wetOutput.getWritePointer (0);
     auto* wetRight = wetOutput.getWritePointer (1);
 
-    for (int offset = 0; offset < numSamples;)
+    for (int first = 0; first < numSamples;)
     {
-        const auto n = std::min (numSamples - offset, monoInput.getNumSamples());
-        const auto first = start + offset;
+        const auto n = std::min (numSamples - first, monoInput.getNumSamples());
 
         // The resonators are excited by the mono sum of the input
         monoInput.clear (0, 0, n);
@@ -300,7 +206,7 @@ void PluginProcessor::renderSegment (juce::AudioBuffer<float>& buffer, int start
         inputHighPass.process (mono, n);
         exciter.process (mono, mono, n);
 
-        engine->process (mono, wetLeft, wetRight, n);
+        resonatorBank.process (mono, wetLeft, wetRight, n);
         tiltEq.process (wetLeft, wetRight, n);
 
         if (numOutputs == 1)
@@ -326,72 +232,51 @@ void PluginProcessor::renderSegment (juce::AudioBuffer<float>& buffer, int start
             if (peaks[ch] > outputPeaks[ch].load (std::memory_order_relaxed))
                 outputPeaks[ch].store (peaks[ch], std::memory_order_relaxed);
 
-        offset += n;
+        first += n;
     }
 }
 
-void PluginProcessor::publishChord (const chordify::Voices& voices, int root)
+void PluginProcessor::updateEngine()
 {
-    std::array<std::uint64_t, 2> words {};
-    for (const auto& voice : voices)
+    const auto& p = parameterValues;
+
+    // The chord: the piano selection or a saved slot, as Chord Slot picks
+    const auto notes = chordSlots.notesFor (juce::roundToInt (p.chordSlot.load()));
+    playingChord.store (ChordSlots::pack (notes), std::memory_order_relaxed);
+    chordVoices = chordify::chordFromNotes (notes, chordVoices);
+
+    PartialInputs inputs;
+    inputs.voices = chordVoices;
+    inputs.settings.numHarmonics = juce::roundToInt (p.harmonics.load());
+    inputs.settings.brightness = p.brightness.load() / 100.0f;
+    inputs.settings.oddOnly = juce::roundToInt (p.timbre.load()) == 1;
+    inputs.settings.detuneCents = p.detune.load();
+    inputs.settings.spread = p.spread.load() / 100.0f;
+    inputs.settings.sampleRate = currentSampleRate;
+
+    if (inputs != lastPartialInputs)
     {
-        if (! voice.gated)
-            continue;
-        const auto note = std::clamp (juce::roundToInt (voice.note), 0, 127);
-        words[(size_t) note / 64] |= std::uint64_t { 1 } << (note % 64);
+        resonatorBank.setPartials (chordify::computePartials (inputs.voices, inputs.settings));
+        lastPartialInputs = inputs;
     }
 
-    const auto anyHeld = words[0] != 0 || words[1] != 0;
-    for (size_t i = 0; i < words.size(); ++i)
-        chordNotes[i].store (words[i], std::memory_order_relaxed);
-    chordRoot.store (anyHeld ? root : -1, std::memory_order_relaxed);
+    exciter.setAmount (p.excite.load() / 100.0f);
+    inputHighPass.setCutoff (p.inputHpf.load());
+    tiltEq.setTone (p.tone.load() / 100.0f);
+    outputGainSmoothed.setTargetValue (outputGainFromDb (p.output.load()));
+    resonatorBank.setDecay (p.decay.load());
+    resonatorBank.setGlide (p.glide.load() / 1000.0f);
+    mixSmoothed.setTargetValue (p.mix.load() / 100.0f);
 }
 
 std::bitset<128> PluginProcessor::getChordNotes() const
 {
-    std::bitset<128> notes;
-    for (size_t word = 0; word < chordNotes.size(); ++word)
-    {
-        const auto bits = chordNotes[word].load (std::memory_order_relaxed);
-        for (size_t i = 0; i < 64; ++i)
-            notes[word * 64 + i] = ((bits >> i) & 1) != 0;
-    }
-    return notes;
+    return ChordSlots::unpack (playingChord.load (std::memory_order_relaxed));
 }
 
 std::array<float, 2> PluginProcessor::takeOutputPeaks()
 {
     return { outputPeaks[0].exchange (0.0f, std::memory_order_relaxed), outputPeaks[1].exchange (0.0f, std::memory_order_relaxed) };
-}
-
-void PluginProcessor::updateHeldNotes (const juce::MidiBuffer& midi)
-{
-    for (const auto metadata : midi)
-    {
-        const auto message = metadata.getMessage();
-        const auto note = message.getNoteNumber();
-        const auto bit = std::uint64_t { 1 } << (note % 64);
-
-        if (message.isNoteOn())
-            heldNotes[(size_t) note / 64].fetch_or (bit, std::memory_order_relaxed);
-        else if (message.isNoteOff())
-            heldNotes[(size_t) note / 64].fetch_and (~bit, std::memory_order_relaxed);
-        else if (message.isAllNotesOff() || message.isAllSoundOff())
-            for (auto& word : heldNotes)
-                word.store (0, std::memory_order_relaxed);
-    }
-}
-
-std::bitset<128> PluginProcessor::getHeldNotes() const
-{
-    std::bitset<128> notes;
-    for (size_t word = 0; word < heldNotes.size(); ++word)
-    {
-        const auto bits = heldNotes[word].load (std::memory_order_relaxed);
-        for (size_t i = 0; i < 64; ++i)
-            notes[word * 64 + i] = ((bits >> i) & 1) != 0;
-    }
-    return notes;
 }
 
 //==============================================================================
@@ -408,7 +293,9 @@ juce::AudioProcessorEditor* PluginProcessor::createEditor()
 //==============================================================================
 void PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    if (const auto xml = parameters.copyState().createXml())
+    auto state = parameters.copyState();
+    chordSlots.writeTo (state);
+    if (const auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
 }
 
@@ -416,7 +303,9 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     if (const auto xml = getXmlFromBinary (data, sizeInBytes); xml != nullptr && xml->hasTagName (parameters.state.getType()))
     {
-        parameters.replaceState (juce::ValueTree::fromXml (*xml));
+        const auto state = juce::ValueTree::fromXml (*xml);
+        chordSlots.readFrom (state);
+        parameters.replaceState (state);
         currentProgram = parameters.state.getProperty (programProperty, 0);
     }
 }

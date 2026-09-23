@@ -2,8 +2,9 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
-// Factory presets, exposed to hosts as programs. Values are in real-world units (as shown in
-// the UI); any parameter a preset doesn't list is reset to its default.
+// Factory presets, exposed to hosts as programs. They set the sound only: values are in real-world
+// units (as shown in the UI), any sound parameter a preset doesn't list is reset to its default, and
+// the chord (Chord Slot, the slots and the piano selection) is left alone.
 namespace params
 {
     struct Preset

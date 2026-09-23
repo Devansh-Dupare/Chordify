@@ -11,42 +11,32 @@ namespace
         param->setValueNotifyingHost (param->convertTo0to1 (value));
     }
 
-    float valueOf (PluginProcessor& plugin, const char* paramId)
+    int activeSlot (PluginProcessor& plugin)
     {
-        return plugin.getParameterTree().getRawParameterValue (paramId)->load();
+        return juce::roundToInt (plugin.getParameterTree().getRawParameterValue (params::id::chordSlot)->load());
     }
 
-    ui::ChordKeyboard makeKeyboard (PluginProcessor& plugin)
+    ChordSlots::Notes chord (std::initializer_list<int> notes)
     {
-        return ui::ChordKeyboard (plugin.getParameterTree(), [&plugin] {
-            return ui::ChordKeyboard::SoundingChord { plugin.getChordNotes(), plugin.getChordRoot() };
-        });
-    }
-
-    std::vector<int> highlightedNotes (const ui::ChordKeyboard& keyboard)
-    {
-        std::vector<int> notes;
-        for (int n = 0; n < 128; ++n)
-            if (keyboard.getHighlightedNotes()[(size_t) n])
-                notes.push_back (n);
-        return notes;
+        ChordSlots::Notes result;
+        for (auto n : notes)
+            result[(size_t) n] = true;
+        return result;
     }
 
     // Renders noise through the plugin in 256-sample blocks without re-preparing it
-    std::vector<float> render (PluginProcessor& plugin, size_t numSamples, const juce::MidiBuffer& firstBlockMidi = {})
+    std::vector<float> render (PluginProcessor& plugin, size_t numSamples)
     {
         constexpr int blockSize = 256;
         juce::Random random (5);
         std::vector<float> out;
         juce::AudioBuffer<float> buffer (2, blockSize);
+        juce::MidiBuffer midi;
         for (size_t start = 0; start < numSamples; start += blockSize)
         {
             for (int ch = 0; ch < 2; ++ch)
                 for (int i = 0; i < blockSize; ++i)
                     buffer.setSample (ch, i, 0.2f * (random.nextFloat() * 2.0f - 1.0f));
-            juce::MidiBuffer midi;
-            if (start == 0)
-                midi = firstBlockMidi;
             plugin.processBlock (buffer, midi);
             out.insert (out.end(), buffer.getReadPointer (0), buffer.getReadPointer (0) + blockSize);
         }
@@ -60,127 +50,183 @@ namespace
     }
 }
 
-TEST_CASE ("Piano keyboard follows the parameters", "[keyboard]")
+TEST_CASE ("Chord slot storage", "[slots]")
 {
-    PluginProcessor plugin;
-    auto keyboard = makeKeyboard (plugin);
-
-    SECTION ("the default chord is lit on open")
+    SECTION ("a chord packs into one word and back")
     {
-        CHECK (highlightedNotes (keyboard) == std::vector<int> { 48, 52, 55 }); // C2 major
-        CHECK (keyboard.getHighlightedRoot() == 48);
-        CHECK (keyboard.getLowestNote() == 48);
+        const auto notes = chord ({ 0, 36, 60, 64, 67, 127 });
+        CHECK (ChordSlots::unpack (ChordSlots::pack (notes)) == notes);
+        CHECK (ChordSlots::unpack (ChordSlots::pack ({})).none());
     }
 
-    SECTION ("host automation of Root and Chord Type relights the keys")
+    SECTION ("more than eight notes keeps the lowest eight")
     {
-        setValue (plugin, params::id::root, 57.0f);
-        setValue (plugin, params::id::chordType, 7.0f); // A minor 7
-        CHECK (highlightedNotes (keyboard) == std::vector<int> { 57, 60, 64, 67 });
-        CHECK (keyboard.getHighlightedRoot() == 57);
+        const auto packed = ChordSlots::unpack (ChordSlots::pack (chord ({ 40, 41, 42, 43, 44, 45, 46, 47, 48, 49 })));
+        CHECK (packed == chord ({ 40, 41, 42, 43, 44, 45, 46, 47 }));
     }
 
-    SECTION ("the window follows a root in another octave")
+    SECTION ("text round trip ignores junk")
     {
-        setValue (plugin, params::id::root, 75.0f); // D#4
-        CHECK (keyboard.getLowestNote() == 72);
+        CHECK (ChordSlots::fromString (ChordSlots::toString (chord ({ 48, 52, 55 }))) == chord ({ 48, 52, 55 }));
+        CHECK (ChordSlots::fromString ("60 x -3 200 64") == chord ({ 60, 64 }));
+        CHECK (ChordSlots::noteNames (chord ({ 48, 52, 55 })) == "C2 E2 G2");
     }
 
-    SECTION ("a keyboard opened after automation shows the current chord")
+    SECTION ("new instances start with C2 E2 G2 on the piano and empty slots")
     {
-        setValue (plugin, params::id::root, 62.0f);
-        setValue (plugin, params::id::chordType, 1.0f);
-        auto reopened = makeKeyboard (plugin);
-        CHECK (highlightedNotes (reopened) == std::vector<int> { 62, 65, 69 });
+        ChordSlots slots;
+        CHECK (slots.getPiano() == chord ({ 48, 52, 55 }));
+        for (int i = 0; i < ChordSlots::numSlots; ++i)
+            CHECK (slots.getSlot (i).none());
+        CHECK (slots.notesFor (params::pianoSlot) == slots.getPiano());
     }
 }
 
-TEST_CASE ("Piano keyboard writes the parameters", "[keyboard]")
+TEST_CASE ("Picking notes on the keyboard", "[keyboard]")
 {
     PluginProcessor plugin;
-    auto keyboard = makeKeyboard (plugin);
+    auto& slots = plugin.getChordSlots();
+    ui::ChordKeyboard keyboard (plugin.getParameterTree(), slots);
 
-    SECTION ("selecting a key sets Root")
+    SECTION ("clicking toggles notes in the piano selection")
     {
-        keyboard.selectRoot (53);
-        CHECK (juce::roundToInt (valueOf (plugin, params::id::root)) == 53);
-        CHECK (keyboard.getHighlightedRoot() == 53);
+        keyboard.toggleNote (59); // add B2
+        keyboard.toggleNote (52); // remove E2
+        CHECK (slots.getPiano() == chord ({ 48, 55, 59 }));
+        CHECK (keyboard.getShownNotes() == chord ({ 48, 55, 59 }));
     }
 
-    SECTION ("clicking keys in the upper octave doesn't scroll the keyboard")
+    SECTION ("a chord holds at most eight notes")
     {
-        REQUIRE (keyboard.getLowestNote() == 48); // showing C2 - B3
-        keyboard.selectRoot (71);                 // B3, the last key
-        CHECK (keyboard.getLowestNote() == 48);
-        keyboard.selectRoot (60);                 // C3
-        CHECK (keyboard.getLowestNote() == 48);
-        keyboard.selectRoot (49);
+        keyboard.clearNotes();
+        bool limitHit = false;
+        keyboard.onNoteLimit = [&] { limitHit = true; };
+        for (int note = 60; note < 68; ++note)
+            CHECK (keyboard.toggleNote (note));
+        CHECK_FALSE (keyboard.toggleNote (70));
+        CHECK (limitHit);
+        CHECK (slots.getPiano().count() == 8);
+    }
+
+    SECTION ("clear removes every note")
+    {
+        keyboard.clearNotes();
+        CHECK (slots.getPiano().none());
+    }
+
+    SECTION ("editing while a slot plays switches to the piano and leaves the slot alone")
+    {
+        slots.setSlot (0, chord ({ 57, 60, 64 }));
+        setValue (plugin, params::id::chordSlot, 1.0f);
+        CHECK (keyboard.getShownNotes() == chord ({ 57, 60, 64 })); // the slot's chord is shown
+
+        keyboard.toggleNote (67);
+        CHECK (activeSlot (plugin) == params::pianoSlot);
+        CHECK (slots.getPiano() == chord ({ 57, 60, 64, 67 })); // edited from the slot's chord
+        CHECK (slots.getSlot (0) == chord ({ 57, 60, 64 }));     // slot unchanged until saved over
+    }
+
+    SECTION ("clicking keys in the upper octaves doesn't scroll the keyboard")
+    {
+        REQUIRE (keyboard.getLowestNote() == 48); // showing C2 - B4
+        keyboard.toggleNote (83);                 // B4, the last key
         CHECK (keyboard.getLowestNote() == 48);
     }
 
-    SECTION ("selecting a key in a MIDI mode switches back to Internal")
+    SECTION ("the view follows a slot chord that would be off screen")
     {
-        setValue (plugin, params::id::chordSource, (float) params::ChordSource::midi);
-        keyboard.selectRoot (55);
-        CHECK (juce::roundToInt (valueOf (plugin, params::id::chordSource)) == (int) params::ChordSource::internal);
-        CHECK (juce::roundToInt (valueOf (plugin, params::id::root)) == 55);
+        slots.setSlot (1, chord ({ 88, 91, 95 })); // E5 G5 B5
+        setValue (plugin, params::id::chordSlot, 2.0f);
+        CHECK (keyboard.getLowestNote() == 84);
     }
 
-    SECTION ("octave buttons move Root within its range")
+    SECTION ("the view scrolls down to a slot chord's lowest note")
     {
-        keyboard.shiftOctave (1);
-        CHECK (juce::roundToInt (valueOf (plugin, params::id::root)) == 60);
-        CHECK (keyboard.getLowestNote() == 60); // the view moves with it
+        slots.setSlot (1, chord ({ 45, 52, 57, 60 })); // A1 E2 A2 C3: A1 is below C2
+        setValue (plugin, params::id::chordSlot, 2.0f);
+        CHECK (keyboard.getLowestNote() == 36);
+    }
+
+    SECTION ("octave buttons scroll the view without touching the chord")
+    {
         keyboard.shiftOctave (-1);
-        keyboard.shiftOctave (-1);
-        CHECK (juce::roundToInt (valueOf (plugin, params::id::root)) == 36);
-        keyboard.shiftOctave (-1);
-        keyboard.shiftOctave (-1); // 12 would be below the range: stays at 24
-        CHECK (juce::roundToInt (valueOf (plugin, params::id::root)) == 24);
+        CHECK (keyboard.getLowestNote() == 36);
+        CHECK (slots.getPiano() == chord ({ 48, 52, 55 }));
     }
 
     SECTION ("keys map to the right notes on screen")
     {
-        keyboard.setBounds (0, 0, 14 * 30, 100); // two octaves of 30 px white keys, starting at C2
-        CHECK (keyboard.noteAt ({ 5.0f, 90.0f }) == 48);   // C2, bottom of the first white key
+        keyboard.setBounds (0, 0, 21 * 30, 100); // three octaves of 30 px white keys, starting at C2
+        CHECK (keyboard.noteAt ({ 5.0f, 90.0f }) == 48);   // C2
         CHECK (keyboard.noteAt ({ 30.0f, 20.0f }) == 49);  // C#2, top of the first boundary
-        CHECK (keyboard.noteAt ({ 45.0f, 90.0f }) == 50);  // D2
-        CHECK (keyboard.noteAt ({ 215.0f, 90.0f }) == 60); // C3, first white key of the second octave
-        CHECK (keyboard.noteAt ({ 415.0f, 90.0f }) == 71); // B3, last key
-        CHECK_FALSE (keyboard.noteAt ({ 500.0f, 90.0f }).has_value());
+        CHECK (keyboard.noteAt ({ 215.0f, 90.0f }) == 60); // C3
+        CHECK (keyboard.noteAt ({ 625.0f, 90.0f }) == 83); // B4, last key
+        CHECK_FALSE (keyboard.noteAt ({ 700.0f, 90.0f }).has_value());
     }
 }
 
-TEST_CASE ("Chord type buttons follow the parameter", "[keyboard]")
+TEST_CASE ("Saving and playing slots", "[keyboard]")
 {
     PluginProcessor plugin;
-    ui::ChordTypeButtons buttons (plugin.getParameterTree());
+    auto& slots = plugin.getChordSlots();
+    ui::ChordKeyboard keyboard (plugin.getParameterTree(), slots);
+    ui::ChordSlotButtons slotButtons (plugin.getParameterTree(), slots);
 
-    auto toggled = [&] {
-        juce::StringArray on;
-        for (auto* child : buttons.getChildren())
-            if (auto* button = dynamic_cast<juce::Button*> (child); button != nullptr && button->getToggleState())
-                on.add (button->getButtonText());
-        return on;
-    };
+    SECTION ("clicking an empty slot saves the keyboard's chord and plays it")
+    {
+        slotButtons.clickSlot (2);
+        CHECK (slots.getSlot (2) == chord ({ 48, 52, 55 }));
+        CHECK (activeSlot (plugin) == 3);
+    }
 
-    CHECK (toggled() == juce::StringArray { "Maj" });
-    setValue (plugin, params::id::chordType, 7.0f);
-    CHECK (toggled() == juce::StringArray { "Min7" });
+    SECTION ("clicking a filled slot plays it and shows it on the keyboard")
+    {
+        slots.setSlot (4, chord ({ 53, 57, 60 }));
+        slotButtons.clickSlot (4);
+        CHECK (activeSlot (plugin) == 5);
+        CHECK (slots.getSlot (4) == chord ({ 53, 57, 60 })); // not overwritten
+        CHECK (keyboard.getShownNotes() == chord ({ 53, 57, 60 }));
+    }
 
-    for (auto* child : buttons.getChildren())
-        if (auto* button = dynamic_cast<juce::Button*> (child); button != nullptr && button->getButtonText() == "Sus4")
-            button->triggerClick();
-    juce::MessageManager::getInstance()->runDispatchLoopUntil (50); // triggerClick is asynchronous
-    CHECK (juce::roundToInt (valueOf (plugin, params::id::chordType)) == 5);
+    SECTION ("an empty slot can't be filled with nothing")
+    {
+        keyboard.clearNotes();
+        bool told = false;
+        slotButtons.onNothingToSave = [&] { told = true; };
+        slotButtons.clickSlot (0);
+        CHECK (told);
+        CHECK (slots.getSlot (0).none());
+        CHECK (activeSlot (plugin) == params::pianoSlot);
+    }
+
+    SECTION ("replace and clear")
+    {
+        slots.setSlot (1, chord ({ 50, 53, 57 }));
+        slotButtons.saveToSlot (1); // the keyboard shows the piano selection, C2 E2 G2
+        CHECK (slots.getSlot (1) == chord ({ 48, 52, 55 }));
+        slotButtons.clearSlot (1);
+        CHECK (slots.getSlot (1).none());
+    }
+
+    SECTION ("automating Chord Slot relights the keyboard")
+    {
+        slots.setSlot (6, chord ({ 55, 59, 62, 65 }));
+        setValue (plugin, params::id::chordSlot, 7.0f);
+        CHECK (keyboard.getShownNotes() == chord ({ 55, 59, 62, 65 }));
+        setValue (plugin, params::id::chordSlot, 0.0f);
+        CHECK (keyboard.getShownNotes() == chord ({ 48, 52, 55 }));
+    }
 }
 
-TEST_CASE ("A key click and the same automation sound identical", "[keyboard]")
+TEST_CASE ("A slot click and the same automation sound identical", "[keyboard]")
 {
     PluginProcessor clicked, automated;
-    auto keyboard = makeKeyboard (clicked);
-    keyboard.selectRoot (57);
-    setValue (automated, params::id::root, 57.0f);
+    for (auto* plugin : { &clicked, &automated })
+        plugin->getChordSlots().setSlot (0, chord ({ 57, 60, 64 }));
+
+    ui::ChordSlotButtons buttons (clicked.getParameterTree(), clicked.getChordSlots());
+    buttons.clickSlot (0);
+    setValue (automated, params::id::chordSlot, 1.0f);
 
     prepare (clicked);
     prepare (automated);
@@ -194,37 +240,39 @@ TEST_CASE ("A key click and the same automation sound identical", "[keyboard]")
     CHECK (identical);
 }
 
-TEST_CASE ("A chord picked on the keyboard survives a session reload", "[keyboard]")
+TEST_CASE ("Chords and slots survive a session reload", "[keyboard]")
 {
     juce::MemoryBlock state;
     {
         PluginProcessor plugin;
-        auto keyboard = makeKeyboard (plugin);
-        keyboard.selectRoot (63);
-        setValue (plugin, params::id::chordType, 6.0f);
+        auto& slots = plugin.getChordSlots();
+        ui::ChordKeyboard keyboard (plugin.getParameterTree(), slots);
+        keyboard.toggleNote (59);
+        slots.setSlot (3, chord ({ 57, 60, 64, 67 }));
+        setValue (plugin, params::id::chordSlot, 4.0f);
         plugin.getStateInformation (state);
     }
 
     PluginProcessor restored;
     restored.setStateInformation (state.getData(), (int) state.getSize());
-    auto keyboard = makeKeyboard (restored);
-    CHECK (highlightedNotes (keyboard) == std::vector<int> { 63, 67, 70, 74 }); // D#3 major 7
+    CHECK (restored.getChordSlots().getPiano() == chord ({ 48, 52, 55, 59 }));
+    CHECK (restored.getChordSlots().getSlot (3) == chord ({ 57, 60, 64, 67 }));
+    CHECK (activeSlot (restored) == 4);
+
+    ui::ChordKeyboard keyboard (restored.getParameterTree(), restored.getChordSlots());
+    CHECK (keyboard.getShownNotes() == chord ({ 57, 60, 64, 67 }));
 }
 
-TEST_CASE ("Switching Chord Source mid-note doesn't click", "[keyboard]")
+TEST_CASE ("Switching slots mid-note doesn't click", "[keyboard]")
 {
     PluginProcessor plugin;
     setValue (plugin, params::id::harmonics, 1.0f); // fundamentals only, so the output is smooth
-    setValue (plugin, params::id::root, 60.0f);
+    plugin.getChordSlots().setPiano (chord ({ 60, 64, 67 }));
+    plugin.getChordSlots().setSlot (0, chord ({ 65, 69, 72 }));
     prepare (plugin);
 
-    // F major held on MIDI while the internal C major plays
-    juce::MidiBuffer notes;
-    for (auto note : { 65, 69, 72 })
-        notes.addEvent (juce::MidiMessage::noteOn (1, note, (juce::uint8) 100), 0);
-    const auto before = render (plugin, 48000, notes);
-
-    setValue (plugin, params::id::chordSource, (float) params::ChordSource::midi);
+    const auto before = render (plugin, 48000);
+    setValue (plugin, params::id::chordSlot, 1.0f);
     const auto after = render (plugin, 24000);
 
     const auto maxSecondDifference = [] (const std::vector<float>& y, size_t start, size_t length) {
@@ -238,5 +286,5 @@ TEST_CASE ("Switching Chord Source mid-note doesn't click", "[keyboard]")
     const auto change = maxSecondDifference (after, 0, 4800);
     INFO ("steady " << steady << " change " << change);
     CHECK (change < 2.0 * steady);
-    CHECK (plugin.getChordNotes()[65]); // now playing the MIDI chord
+    CHECK (plugin.getChordNotes() == chord ({ 65, 69, 72 }));
 }

@@ -36,10 +36,13 @@ namespace ui
         std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> attachment;
     };
 
-    // Titled panel that lays out fixed-width items in a row, spreading any spare width evenly
+    // Titled panel that lays out items in a row. Fixed-width items share any spare width as even
+    // gaps; an item added with fillWidth takes all the spare width instead.
     class Section : public juce::Component
     {
     public:
+        static constexpr int fillWidth = 0;
+
         explicit Section (juce::String title);
 
         void addItem (juce::Component& item, int width);

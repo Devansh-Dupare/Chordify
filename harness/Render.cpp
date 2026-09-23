@@ -17,7 +17,7 @@ namespace
   --sr      <hz>                                 sample rate for generated signal (default: 48000)
   --block   <n>                                  processing block size (default: 512)
   --gain    <db>                                 level of generated signal (default: -12)
-  --notes   <n,n,...>                            MIDI notes held for the whole render, e.g. 60,64,67
+  --notes   <n,n,...>                            chord to play (MIDI note numbers, up to 8), e.g. 60,64,67
   --preset  <index|name>                         load a factory preset first (--set still overrides)
   --set     <paramID>=<value>                    set a parameter (real-world value), repeatable
   --list                                         list the plugin's parameters and presets, then exit
@@ -213,6 +213,15 @@ namespace
             param->setValueNotifyingHost (param->convertTo0to1 (o.params[id].getFloatValue()));
         }
 
+        if (! o.notes.isEmpty())
+        {
+            ChordSlots::Notes chord;
+            for (auto n : o.notes)
+                if (n >= 0 && n < 128)
+                    chord[(size_t) n] = true;
+            processor.getChordSlots().setPiano (chord);
+        }
+
         processor.setPlayConfigDetails (2, 2, sampleRate, o.blockSize);
         processor.prepareToPlay (sampleRate, o.blockSize);
 
@@ -228,13 +237,6 @@ namespace
                 block.copyFrom (ch, 0, input, ch, start, len);
 
             midi.clear();
-            if (start == 0)
-                for (auto n : o.notes)
-                    midi.addEvent (juce::MidiMessage::noteOn (1, n, (juce::uint8) 100), 0);
-            if (start + len >= numSamples)
-                for (auto n : o.notes)
-                    midi.addEvent (juce::MidiMessage::noteOff (1, n), len - 1);
-
             const auto t0 = juce::Time::getHighResolutionTicks();
             processor.processBlock (block, midi);
             processSeconds += juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0);

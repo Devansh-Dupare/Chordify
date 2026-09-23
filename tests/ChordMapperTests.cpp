@@ -36,134 +36,52 @@ TEST_CASE ("MIDI note to frequency", "[chordmapper]")
     CHECK (midiNoteToHz (69.5) == Catch::Approx (440.0 * std::exp2 (0.5 / 12.0)));
 }
 
-TEST_CASE ("Internal chords", "[chordmapper]")
+TEST_CASE ("Chords from notes", "[chordmapper]")
 {
-    const Voices none {};
+    const auto notes = [] (std::initializer_list<int> list) {
+        std::bitset<128> result;
+        for (auto n : list)
+            result[(size_t) n] = true;
+        return result;
+    };
 
-    SECTION ("major triad on C3")
+    SECTION ("one gated voice per note, lowest first")
     {
-        const auto voices = internalChord (60, 0, none);
+        const auto voices = chordFromNotes (notes ({ 67, 60, 64 }), {});
         CHECK (countUsed (voices) == 3);
         CHECK (voices[0].note == 60.0f);
         CHECK (voices[1].note == 64.0f);
         CHECK (voices[2].note == 67.0f);
-        CHECK (voices[0].gated);
+        CHECK (voices[2].gated);
     }
 
-    SECTION ("minor 7th has four tones")
+    SECTION ("a chord change moves each voice to the note in the same position")
     {
-        const auto voices = internalChord (57, 7, none);
-        CHECK (countUsed (voices) == 4);
-        CHECK (voices[1].note == 60.0f);
-        CHECK (voices[3].note == 67.0f);
+        const auto cMajor = chordFromNotes (notes ({ 60, 64, 67 }), {});
+        const auto fMajor = chordFromNotes (notes ({ 60, 65, 69 }), cMajor);
+        CHECK (fMajor[1].note == 65.0f); // E3 glides to F3
+        CHECK (fMajor[2].note == 69.0f); // G3 glides to A3
     }
 
-    SECTION ("tones dropped by a chord change ring out")
+    SECTION ("notes dropped by a chord change ring out at their pitch")
     {
-        const auto seventh = internalChord (60, 6, none); // major 7: C E G B
-        const auto triad = internalChord (60, 0, seventh);
+        const auto seventh = chordFromNotes (notes ({ 60, 64, 67, 71 }), {});
+        const auto triad = chordFromNotes (notes ({ 60, 64, 67 }), seventh);
         CHECK (triad[3].used);
         CHECK_FALSE (triad[3].gated);
         CHECK (triad[3].note == 71.0f);
+
+        const auto silence = chordFromNotes ({}, triad);
+        CHECK (countUsed (silence) == 4);
+        for (const auto& voice : silence)
+            CHECK_FALSE (voice.gated);
     }
 
-    SECTION ("releasing a chord keeps its pitches")
+    SECTION ("no more than maxChordNotes notes")
     {
-        const auto released = releaseAll (internalChord (60, 0, none));
-        CHECK (released[2].used);
-        CHECK_FALSE (released[2].gated);
-        CHECK (released[2].note == 67.0f);
-    }
-
-    SECTION ("out of range chord types are clamped")
-    {
-        CHECK (chordIntervals (-1).size() == 3);
-        CHECK (chordIntervals (1000).size() == 2); // power chord, the last entry
-    }
-}
-
-TEST_CASE ("Voice allocation", "[chordmapper]")
-{
-    VoiceAllocator allocator;
-
-    SECTION ("notes are held and released")
-    {
-        allocator.noteOn (60);
-        allocator.noteOn (64);
-        auto voices = allocator.getVoices();
-        CHECK (countUsed (voices) == 2);
-
-        allocator.noteOff (60);
-        voices = allocator.getVoices();
-        CHECK (voices[0].used);
-        CHECK_FALSE (voices[0].gated);
-        CHECK (voices[0].note == 60.0f); // keeps its pitch while ringing out
-        CHECK (voices[1].gated);
-    }
-
-    SECTION ("a ninth note steals the voice held the longest")
-    {
-        for (int n = 0; n < maxVoices; ++n)
-            allocator.noteOn (60 + n);
-        allocator.noteOn (80);
-
-        const auto voices = allocator.getVoices();
-        CHECK (voices[0].note == 80.0f);
-        CHECK (voices[1].note == 61.0f);
-    }
-
-    SECTION ("new notes prefer unused voices, then the longest-released")
-    {
-        allocator.noteOn (60);
-        allocator.noteOn (62);
-        allocator.noteOff (60);
-        allocator.noteOn (64);
-        CHECK (allocator.getVoices()[2].note == 64.0f); // unused voice, voice 0 keeps ringing
-
-        for (int n = 3; n < maxVoices; ++n)
-            allocator.noteOn (70 + n);
-        allocator.noteOff (62);
-        allocator.noteOn (90);
-        CHECK (allocator.getVoices()[0].note == 90.0f); // released before voice 1
-    }
-
-    SECTION ("repeating a held note reuses its voice")
-    {
-        allocator.noteOn (60);
-        allocator.noteOn (60);
-        CHECK (countUsed (allocator.getVoices()) == 1);
-    }
-
-    SECTION ("all notes off releases everything")
-    {
-        allocator.noteOn (60);
-        allocator.noteOn (67);
-        allocator.allNotesOff();
-        for (const auto& v : allocator.getVoices())
-            CHECK_FALSE (v.gated);
-    }
-
-    SECTION ("the last held note is tracked for MIDI Root mode")
-    {
-        CHECK_FALSE (allocator.lastHeldNote().has_value());
-        allocator.noteOn (60);
-        allocator.noteOn (65);
-        CHECK (allocator.lastHeldNote() == 65.0f);
-        allocator.noteOff (65);
-        CHECK (allocator.lastHeldNote() == 60.0f); // falls back to the key still held
-        allocator.setPitchBend (0.5f);
-        CHECK (allocator.lastHeldNote() == 61.0f);
-        allocator.noteOff (60);
-        CHECK_FALSE (allocator.lastHeldNote().has_value());
-    }
-
-    SECTION ("pitch bend shifts every voice by up to two semitones")
-    {
-        allocator.noteOn (60);
-        allocator.setPitchBend (1.0f);
-        CHECK (allocator.getVoices()[0].note == 62.0f);
-        allocator.setPitchBend (-0.5f);
-        CHECK (allocator.getVoices()[0].note == 59.0f);
+        const auto voices = chordFromNotes (notes ({ 48, 50, 52, 53, 55, 57, 59, 60, 62, 64 }), {});
+        CHECK (countUsed (voices) == maxChordNotes);
+        CHECK (voices[(size_t) maxChordNotes - 1].note == 60.0f); // the lowest eight are kept
     }
 }
 

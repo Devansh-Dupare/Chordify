@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - CI/CD via GitHub Actions is disabled for now (push/pull_request triggers commented out in `.github/workflows/`); workflows can still be run manually via `workflow_dispatch`.
 - No Intel IPP, no code signing yet.
 - CLAP is disabled for now (commented out in `CMakeLists.txt`). Formats built: VST3, AU, AUv3, Standalone.
-- The design/roadmap lives in `~/Downloads/Sound-to-Chord Plugin — Implementation Roadmap.md`: a resonator-bank engine (primary) plus an optional FFT spectral engine that imposes chord frequencies on any input. Phase 1 (Faust/SuperCollider prototyping) was skipped in favour of the `Render` harness below.
+- The original roadmap lives in `~/Downloads/Sound-to-Chord Plugin — Implementation Roadmap.md`. The user has since simplified the product: **one engine (resonator bank, no FFT/spectral engine), no prebuilt chord types, no MIDI input.** Chords are picked note by note on an on-screen piano and saved into 8 slots. Don't reintroduce chord types, MIDI modes or a second engine without asking.
 
 ## About This Project
 
@@ -53,7 +53,7 @@ On macOS for universal binary: `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"`
 
 ```bash
 # AU
-auval -v aumf Chfy Duph   # aumf = music effect (audio effect that receives MIDI)
+auval -v aufx Chfy Duph   # aufx = plain audio effect (no MIDI input)
 
 # VST3 + AU via pluginval (installed at ~/Applications/pluginval.app)
 PV=~/Applications/pluginval.app/Contents/MacOS/pluginval
@@ -68,7 +68,7 @@ The AU "Current program is -1" pluginval warning is benign (JUCE AU wrapper).
 `harness/Render.cpp` builds a `Render` CLI that feeds a test signal (noise, pink, impulse, sine) or a WAV file through `PluginProcessor` and writes a 32-bit float WAV. It reports latency, CPU (% of realtime, µs/block), peak/RMS and NaN/inf. Report its CPU/latency numbers on every DSP milestone.
 
 ```bash
-./cmake-build-debug/Render --input pink --notes 60,64,67 --out /tmp/chord.wav
+./cmake-build-debug/Render --input pink --notes 60,64,67 --out chord.wav   # --notes sets the piano chord
 ./cmake-build-debug/Render --list                    # parameter IDs
 ./cmake-build-debug/Render --set decay=2.5 ...       # real-world parameter values
 ./cmake-build-debug/Render --preset "Glass Pad" ...  # factory preset (index or name), --set overrides
@@ -81,7 +81,8 @@ Use a Release build for meaningful CPU numbers.
 - `source/` - Plugin source code (PluginProcessor, PluginEditor)
 - `source/params/` - Parameter IDs and `AudioProcessorValueTreeState` layout. IDs and choice-list order are saved in sessions — never rename/reorder, only append
 - `tests/` - Catch2 test files
-- `source/dsp/` - JUCE-free DSP: `Resonator` (single TPT SVF, reference maths), `ResonatorBank` (the engine), `ChordMapper` (notes → partial grid, voice allocation), `Exciter` (input → envelope-following noise), `Engine` (interface for Phase 4's spectral engine)
+- `source/dsp/` - JUCE-free DSP: `Resonator` (single TPT SVF, reference maths), `ResonatorBank` (the engine), `ChordMapper` (chord notes → voices → partial grid), `Exciter` (input → envelope-following noise)
+- `source/state/` - `ChordSlots`: the piano selection and 8 saved slots
 - `harness/` - `Render` offline render CLI (see Render Harness)
 - `benchmarks/` - Catch2 benchmark files
 - `cmake/` - CMake modules (Tests.cmake, Benchmarks.cmake, Assets.cmake, etc.)
@@ -97,12 +98,13 @@ Use a Release build for meaningful CPU numbers.
 - `ChordMapper` fills a fixed `PartialGrid` of 8 voices × 16 harmonics (slot = voice·16 + harmonic). Slots keep their index while a voice holds a note, so the bank can glide them. Held partials within 10 cents are merged.
 - `ResonatorBank` updates control state every 32 samples (log-frequency glide, ≥ 5 ms; 5 ms amplitude/gate smoothing) and linearly interpolates coefficients across the interval. Active slots are packed into contiguous lanes for auto-vectorisation; silent released slots are switched off.
 - `Exciter` (Excite param, default 100%) crossfades the resonator input from the raw signal to pink noise following the input's level (1 ms attack, 30 ms release). Resonators only ring where the input has energy, so a **pitched input only excites the partials matching its own harmonics and the chord collapses to one note** — the noise excitation is what makes every chord tone ring. Don't remove it or lower its default without re-testing pitched input (`tests/ParametersTests.cpp` "[chord]").
-- Chord sources: Internal (root + chord type params), MIDI (one chord tone per held key), MIDI Root (last held key is the root, chord type builds on it).
+- Chords: `ChordSlots` holds the piano selection and 8 slots, each up to 8 notes packed one byte per note into a single `std::atomic<uint64_t>` (message thread writes, audio thread reads, no tearing). The **Chord Slot** parameter (Piano, Slot 1–8) picks which one plays and is the one automation lane for chord changes. Slots and the piano selection are saved as properties in the plugin state (`writeTo`/`readFrom`), not as parameters. `chordFromNotes` assigns voices lowest note first, so chord changes glide voice by voice; dropped notes ring out.
 - Wet gain = `makeupGain` (+25 dB: drums/voice/pads land within ~2 dB of their input level at defaults, pink noise ~3 dB under) × `sqrt(T60)` decay compensation × `1/sqrt(Σ held amplitude²)`, then a soft limiter above −1 dBFS.
 - Signal chain: mono input sum → `InputHighPass` → `Exciter` → `ResonatorBank` → `TiltEq` (Tone) → dry/wet Mix → Output gain. HPF and Tone affect only the wet path.
-- Chord selection for automation is two lanes, **Root** (MIDI note, shown as "C3") and **Chord Type**, by the user's choice over a single 12×M "Chord" parameter. `ui::ChordKeyboard` (two-octave piano) and `ui::ChordTypeButtons` bind to them via `juce::ParameterAttachment`, so automation/presets/reload relight the keys. In Internal mode the keyboard and chord name are computed from the parameters (correct with no audio running); in the MIDI modes they show the processor's published chord, and clicking a key switches Chord Source back to Internal.
+- UI (`source/ui/ChordKeyboard.*`): `ChordKeyboard` (3-octave piano, click/drag toggles notes) shows the chord Chord Slot selects; any edit writes the piano selection (starting from the chord shown) and switches Chord Slot to Piano, so a slot only changes when saved over. `ChordSlotButtons`: click an empty slot to save the shown chord and play it, click a filled slot to play it, right-click to replace/clear. Both bind Chord Slot via `juce::ParameterAttachment` and read `ChordSlots` directly, so they're right with no audio running. The keyboard only scrolls when the chord's lowest note is off screen (so clicks never scroll it).
 - Factory presets live in `source/params/Presets.cpp` and are exposed as host programs; each resets unlisted parameters to defaults. UI code is in `source/ui/` (Theme = LookAndFeel + colours, Widgets). The editor must call `setLookAndFeel` *after* adding its children, or sliders keep default-styled value boxes.
-- The processor renders between MIDI events (sample-accurate chord changes), excites the bank with the mono input sum, and recomputes partials only when their inputs change.
+- The processor picks the chord once per block, excites the bank with the mono input sum, and recomputes partials only when their inputs change.
+- Factory presets are sound-only: they never touch Chord Slot, the slots or the piano selection.
 
 **SharedCode Library**: The `SharedCode` INTERFACE library links plugin source code to both the main plugin target and the Tests target, avoiding ODR violations.
 

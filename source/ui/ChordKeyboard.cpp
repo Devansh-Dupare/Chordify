@@ -1,6 +1,4 @@
 #include "ChordKeyboard.h"
-#include "../dsp/ChordMapper.h"
-#include "../params/Parameters.h"
 
 namespace ui
 {
@@ -11,30 +9,28 @@ namespace ui
         constexpr int whitesPerOctave = 7;
         constexpr float blackWidthRatio = 0.6f;
         constexpr float blackHeightRatio = 0.62f;
+        constexpr int maxWindowStart = 12 * ((128 - ChordKeyboard::numKeys) / 12);
 
         const juce::Colour whiteKey { 0xffd9dce2 };
         const juce::Colour blackKey { 0xff262a33 };
 
-        juce::RangedAudioParameter& parameter (juce::AudioProcessorValueTreeState& tree, const char* paramId)
+        const juce::String defaultHint = "Click keys to pick up to 8 notes. Click an empty slot to save the chord there; right-click a slot to replace or clear it.";
+
+        juce::RangedAudioParameter& slotParameter (juce::AudioProcessorValueTreeState& tree)
         {
-            auto* param = tree.getParameter (paramId);
+            auto* param = tree.getParameter (params::id::chordSlot);
             jassert (param != nullptr);
             return *param;
         }
     }
 
-    ChordKeyboard::ChordKeyboard (juce::AudioProcessorValueTreeState& tree, std::function<SoundingChord()> sounding)
-        : rootParam (parameter (tree, params::id::root)),
-          chordTypeParam (parameter (tree, params::id::chordType)),
-          sourceParam (parameter (tree, params::id::chordSource)),
-          rootAttachment (rootParam, [this] (float value) { root = juce::roundToInt (value); update(); }),
-          chordTypeAttachment (chordTypeParam, [this] (float value) { chordType = juce::roundToInt (value); update(); }),
-          sourceAttachment (sourceParam, [this] (float value) { source = juce::roundToInt (value); update(); }),
-          soundingChord (std::move (sounding))
+    //==============================================================================
+    ChordKeyboard::ChordKeyboard (juce::AudioProcessorValueTreeState& tree, ChordSlots& chordSlots)
+        : slotParam (slotParameter (tree)),
+          slots (chordSlots),
+          slotAttachment (slotParam, [this] (float value) { activeSlot = juce::roundToInt (value); update(); })
     {
-        rootAttachment.sendInitialUpdate();
-        chordTypeAttachment.sendInitialUpdate();
-        sourceAttachment.sendInitialUpdate();
+        slotAttachment.sendInitialUpdate();
         setRepaintsOnMouseActivity (false);
     }
 
@@ -45,50 +41,26 @@ namespace ui
 
     void ChordKeyboard::update()
     {
-        std::bitset<128> notes;
-        int newRoot = -1;
+        const auto notes = slots.notesFor (activeSlot);
 
-        // Only scroll when a note would be off screen, and then put its octave first. Otherwise
-        // clicking a key in the upper octave would scroll the keyboard out from under the mouse.
+        // Only scroll when the chord's lowest note is off screen, and then put its octave first.
+        // Scrolling on every edit would move keys out from under the mouse (a click can't hide
+        // the lowest note, since only visible keys can be clicked).
         auto newWindowStart = windowStart;
-        const auto keepVisible = [&newWindowStart] (int note) {
-            if (note < newWindowStart || note >= newWindowStart + numKeys)
-                newWindowStart = 12 * (note / 12);
-        };
-
-        if ((params::ChordSource) source == params::ChordSource::internal)
+        for (int note = 0; note < 128; ++note)
         {
-            // From the parameters, so the keyboard is right even when no audio is being processed
-            for (auto interval : chordify::chordIntervals (chordType))
-                if (root + interval < 128)
-                    notes[(size_t) (root + interval)] = true;
-            newRoot = root;
-            keepVisible (root);
-        }
-        else if (soundingChord != nullptr)
-        {
-            const auto sounding = soundingChord();
-            notes = sounding.notes;
-            newRoot = sounding.root;
-
-            // Keep the sounding chord's lowest note on screen
-            for (int note = 0; note < 128; ++note)
+            if (notes[(size_t) note])
             {
-                if (notes[(size_t) note])
-                {
-                    keepVisible (note);
-                    break;
-                }
+                if (note < windowStart || note >= windowStart + numKeys)
+                    newWindowStart = std::min (12 * (note / 12), maxWindowStart);
+                break;
             }
         }
 
-        newWindowStart = std::clamp (newWindowStart, 0, 12 * ((127 - numKeys) / 12)); // always starts on a C
-
-        if (notes != highlighted || newRoot != highlightedRoot || newWindowStart != windowStart)
+        if (notes != shown || newWindowStart != windowStart)
         {
-            highlighted = notes;
-            highlightedRoot = newRoot;
             const auto windowMoved = newWindowStart != windowStart;
+            shown = notes;
             windowStart = newWindowStart;
             repaint();
             if (windowMoved && onWindowChanged != nullptr)
@@ -98,36 +70,55 @@ namespace ui
 
     void ChordKeyboard::refresh()
     {
-        if ((params::ChordSource) source != params::ChordSource::internal)
-            update();
+        update();
     }
 
-    void ChordKeyboard::selectRoot (int note)
+    bool ChordKeyboard::setNote (int note, bool on)
     {
-        const auto range = rootParam.getNormalisableRange();
-        if (note < (int) range.start || note > (int) range.end)
-            return;
+        if (note < 0 || note > 127 || shown[(size_t) note] == on)
+            return true;
 
-        if ((params::ChordSource) source != params::ChordSource::internal)
-            sourceAttachment.setValueAsCompleteGesture ((float) params::ChordSource::internal);
+        if (on && (int) shown.count() >= chordify::maxChordNotes)
+        {
+            if (onNoteLimit != nullptr)
+                onNoteLimit();
+            return false;
+        }
 
-        rootAttachment.setValueAsCompleteGesture ((float) note);
+        // Edits start from the chord shown and become the piano selection, which then plays
+        auto notes = shown;
+        notes[(size_t) note] = on;
+        slots.setPiano (notes);
+
+        if (activeSlot != params::pianoSlot)
+            slotAttachment.setValueAsCompleteGesture ((float) params::pianoSlot);
+        update();
+        return true;
+    }
+
+    bool ChordKeyboard::toggleNote (int note)
+    {
+        return setNote (note, ! shown[(size_t) std::clamp (note, 0, 127)]);
+    }
+
+    void ChordKeyboard::clearNotes()
+    {
+        slots.setPiano ({});
+        if (activeSlot != params::pianoSlot)
+            slotAttachment.setValueAsCompleteGesture ((float) params::pianoSlot);
+        update();
     }
 
     void ChordKeyboard::shiftOctave (int direction)
     {
-        const auto range = rootParam.getNormalisableRange();
-        const auto shifted = root + 12 * direction;
-        if (shifted < (int) range.start || shifted > (int) range.end)
+        const auto shifted = std::clamp (windowStart + 12 * direction, 0, maxWindowStart);
+        if (shifted == windowStart)
             return;
 
-        // Scroll with the root, so the chord keeps its place on screen
-        windowStart = std::clamp (windowStart + 12 * direction, 0, 12 * ((127 - numKeys) / 12));
+        windowStart = shifted;
+        repaint();
         if (onWindowChanged != nullptr)
             onWindowChanged();
-
-        rootAttachment.setValueAsCompleteGesture ((float) shifted);
-        repaint();
     }
 
     //==============================================================================
@@ -161,7 +152,13 @@ namespace ui
     void ChordKeyboard::mouseDown (const juce::MouseEvent& event)
     {
         lastDraggedNote = -1;
-        mouseDrag (event);
+        if (const auto note = noteAt (event.position))
+        {
+            // The first key decides whether this drag adds or removes notes
+            dragAdds = ! shown[(size_t) *note];
+            lastDraggedNote = *note;
+            setNote (*note, dragAdds);
+        }
     }
 
     void ChordKeyboard::mouseDrag (const juce::MouseEvent& event)
@@ -169,25 +166,12 @@ namespace ui
         if (const auto note = noteAt (event.position); note && *note != lastDraggedNote)
         {
             lastDraggedNote = *note;
-            selectRoot (*note);
+            setNote (*note, dragAdds);
         }
     }
 
     void ChordKeyboard::paint (juce::Graphics& g)
     {
-        const auto range = rootParam.getNormalisableRange();
-        const auto internal = (params::ChordSource) source == params::ChordSource::internal;
-
-        const auto keyColour = [&] (int note, juce::Colour base) {
-            if (note == highlightedRoot)
-                return colours::accent;
-            if (highlighted[(size_t) note])
-                return base.interpolatedWith (colours::accent, 0.55f);
-            if (note < (int) range.start || note > (int) range.end)
-                return base.interpolatedWith (colours::panel, 0.5f); // outside Root's range: not clickable
-            return base;
-        };
-
         for (auto black : { false, true })
         {
             for (int note = windowStart; note < windowStart + numKeys; ++note)
@@ -196,7 +180,8 @@ namespace ui
                     continue;
 
                 const auto key = keyBounds (note).reduced (black ? 0.0f : 1.0f, 0.0f);
-                g.setColour (keyColour (note, black ? blackKey : whiteKey).withMultipliedAlpha (internal ? 1.0f : 0.85f));
+                const auto on = shown[(size_t) note];
+                g.setColour (on ? colours::accent : (black ? blackKey : whiteKey));
                 g.fillRoundedRectangle (key.withTrimmedTop (-4.0f), 3.0f); // rounded bottom corners only
 
                 if (black)
@@ -204,87 +189,245 @@ namespace ui
                     g.setColour (colours::background);
                     g.drawRoundedRectangle (key.withTrimmedTop (-4.0f), 3.0f, 1.0f);
                 }
-                else if (note % 12 == 0)
+
+                if (on || note % 12 == 0)
                 {
-                    g.setColour (note == highlightedRoot ? colours::background : colours::textDim);
-                    g.setFont (juce::FontOptions (10.0f));
-                    g.drawText (juce::MidiMessage::getMidiNoteName (note, true, true, 3), key.withTop (key.getBottom() - 16.0f),
-                        juce::Justification::centred, false);
+                    // Label C keys, and every selected key so the chord can be read off the keyboard
+                    const auto labelArea = key.withTop (key.getBottom() - 16.0f);
+                    g.setColour (on ? colours::background : colours::textDim);
+                    g.setFont (juce::FontOptions (black ? 8.5f : 10.0f, on ? juce::Font::bold : juce::Font::plain));
+                    g.drawText (juce::MidiMessage::getMidiNoteName (note, true, ! black, 3), labelArea, juce::Justification::centred, false);
                 }
             }
         }
     }
 
     //==============================================================================
-    ChordTypeButtons::ChordTypeButtons (juce::AudioProcessorValueTreeState& tree)
-        : param (parameter (tree, params::id::chordType)),
-          attachment (param, [this] (float value) {
-              const auto selected = juce::roundToInt (value);
-              for (int i = 0; i < buttons.size(); ++i)
-                  buttons[i]->setToggleState (i == selected, juce::dontSendNotification);
-          })
+    class ChordSlotButtons::SlotButton : public juce::Button
     {
-        for (int i = 0; i < params::chordTypeShortNames.size(); ++i)
+    public:
+        explicit SlotButton (int slotIndex) : juce::Button ("Slot " + juce::String (slotIndex + 1)), index (slotIndex) {}
+
+        void setContents (const juce::String& noteText, bool isFilled, bool isActive)
         {
-            auto* button = buttons.add (std::make_unique<juce::TextButton> (params::chordTypeShortNames[i]));
-            button->setTooltip (params::chordTypeNames[i]);
-            button->setColour (juce::TextButton::buttonOnColourId, colours::accent);
-            button->setColour (juce::TextButton::textColourOnId, colours::background);
-            button->setConnectedEdges (0);
-            button->onClick = [this, i] { attachment.setValueAsCompleteGesture ((float) i); };
+            if (noteText == notes && isFilled == filled && isActive == active)
+                return;
+            notes = noteText;
+            filled = isFilled;
+            active = isActive;
+            setTooltip (filled ? "Slot " + juce::String (index + 1) + ": " + notes : "Empty: click to save the chord on the keyboard here");
+            repaint();
+        }
+
+        std::function<void()> onRightClick;
+
+        void mouseDown (const juce::MouseEvent& event) override
+        {
+            if (event.mods.isPopupMenu())
+            {
+                if (onRightClick != nullptr)
+                    onRightClick();
+                return;
+            }
+            juce::Button::mouseDown (event);
+        }
+
+        void paintButton (juce::Graphics& g, bool highlighted, bool down) override
+        {
+            auto bounds = getLocalBounds().toFloat().reduced (3.0f);
+            const auto fill = active ? colours::accent : (filled ? colours::panel.brighter (0.1f) : juce::Colours::transparentBlack);
+            g.setColour (fill.brighter (down ? 0.15f : (highlighted ? 0.07f : 0.0f)));
+            g.fillRoundedRectangle (bounds, 6.0f);
+
+            if (! active)
+            {
+                g.setColour (filled ? colours::outline : colours::textDim.withAlpha (highlighted ? 0.7f : 0.4f));
+                g.drawRoundedRectangle (bounds.reduced (0.5f), 6.0f, 1.0f);
+            }
+
+            bounds.reduce (8.0f, 4.0f);
+            const auto textColour = active ? colours::background : colours::text;
+            g.setColour (textColour);
+            g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+            g.drawText (juce::String (index + 1), bounds.removeFromTop (bounds.getHeight() * 0.5f), juce::Justification::bottomLeft, false);
+
+            g.setColour (filled ? textColour.withAlpha (0.85f) : colours::textDim);
+            g.setFont (juce::FontOptions (10.5f));
+            g.drawFittedText (filled ? notes : juce::String ("Empty"), bounds.toNearestInt(), juce::Justification::topLeft, 1, 0.8f);
+        }
+
+    private:
+        int index;
+        juce::String notes;
+        bool filled = false, active = false;
+    };
+
+    ChordSlotButtons::ChordSlotButtons (juce::AudioProcessorValueTreeState& tree, ChordSlots& chordSlots)
+        : slotParam (slotParameter (tree)),
+          slots (chordSlots),
+          attachment (slotParam, [this] (float value) { activeSlot = juce::roundToInt (value); refresh(); })
+    {
+        for (int i = 0; i < ChordSlots::numSlots; ++i)
+        {
+            auto* button = buttons.add (std::make_unique<SlotButton> (i));
+            button->onClick = [this, i] { clickSlot (i); };
+            button->onRightClick = [this, i] { showMenu (i); };
             addAndMakeVisible (button);
         }
         attachment.sendInitialUpdate();
     }
 
-    void ChordTypeButtons::resized()
+    ChordSlotButtons::~ChordSlotButtons() = default;
+
+    ChordSlots::Notes ChordSlotButtons::shownNotes() const
     {
-        constexpr int cellHeight = 34;
-        const auto rows = (buttons.size() + columns - 1) / columns;
-        const auto cellWidth = getWidth() / columns;
-        const auto top = (getHeight() - rows * cellHeight) / 2;
+        return slots.notesFor (activeSlot);
+    }
+
+    void ChordSlotButtons::playSlot (int index)
+    {
+        attachment.setValueAsCompleteGesture ((float) (index + 1));
+        refresh();
+    }
+
+    void ChordSlotButtons::clickSlot (int index)
+    {
+        if (slots.getSlot (index).any())
+        {
+            playSlot (index);
+            return;
+        }
+
+        if (shownNotes().none())
+        {
+            if (onNothingToSave != nullptr)
+                onNothingToSave();
+            return;
+        }
+
+        saveToSlot (index);
+        playSlot (index);
+    }
+
+    void ChordSlotButtons::saveToSlot (int index)
+    {
+        slots.setSlot (index, shownNotes());
+        refresh();
+    }
+
+    void ChordSlotButtons::clearSlot (int index)
+    {
+        slots.setSlot (index, {});
+        refresh();
+    }
+
+    void ChordSlotButtons::showMenu (int index)
+    {
+        const auto filled = slots.getSlot (index).any();
+        const auto haveNotes = shownNotes().any();
+
+        juce::PopupMenu menu;
+        menu.addItem (filled ? "Replace with the chord on the keyboard" : "Save the chord on the keyboard here", haveNotes, false,
+            [this, index] { saveToSlot (index); });
+        menu.addItem ("Clear slot", filled, false, [this, index] { clearSlot (index); });
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (buttons[index]));
+    }
+
+    void ChordSlotButtons::refresh()
+    {
         for (int i = 0; i < buttons.size(); ++i)
-            buttons[i]->setBounds (juce::Rectangle<int> ((i % columns) * cellWidth, top + (i / columns) * cellHeight, cellWidth, cellHeight).reduced (3));
+        {
+            const auto notes = slots.getSlot (i);
+            buttons[i]->setContents (ChordSlots::noteNames (notes), notes.any(), activeSlot == i + 1);
+        }
+    }
+
+    void ChordSlotButtons::resized()
+    {
+        const auto width = (float) getWidth() / (float) buttons.size();
+        for (int i = 0; i < buttons.size(); ++i)
+            buttons[i]->setBounds (juce::Rectangle<float> ((float) i * width, 0.0f, width, (float) getHeight()).toNearestInt());
     }
 
     //==============================================================================
-    OctaveButtons::OctaveButtons (ChordKeyboard& keyboardToControl) : keyboard (keyboardToControl)
+    ChordPanel::ChordPanel (juce::AudioProcessorValueTreeState& tree, ChordSlots& chordSlots)
+        : keyboard (tree, chordSlots), slotButtons (tree, chordSlots)
     {
-        down.onClick = [this] { keyboard.shiftOctave (-1); };
-        up.onClick = [this] { keyboard.shiftOctave (1); };
-        down.setTooltip ("Root down an octave");
-        up.setTooltip ("Root up an octave");
+        octaveCaption.setText ("Octave", juce::dontSendNotification);
+        octaveCaption.setColour (juce::Label::textColourId, colours::textDim);
+        octaveCaption.setFont (juce::FontOptions (12.5f));
+        octaveRange.setJustificationType (juce::Justification::centred);
+        octaveRange.setFont (juce::FontOptions (12.0f));
+        hint.setColour (juce::Label::textColourId, colours::textDim);
+        hint.setFont (juce::FontOptions (12.0f));
+        hint.setText (defaultHint, juce::dontSendNotification);
 
-        range.setJustificationType (juce::Justification::centred);
-        range.setFont (juce::FontOptions (12.5f));
-        range.setColour (juce::Label::textColourId, colours::text);
-
-        caption.setText ("Keyboard", juce::dontSendNotification);
-        caption.setFont (juce::FontOptions (12.5f));
-        caption.setColour (juce::Label::textColourId, colours::textDim);
+        octaveDown.setTooltip ("Scroll the keyboard down an octave");
+        octaveUp.setTooltip ("Scroll the keyboard up an octave");
+        clear.setTooltip ("Remove every note from the keyboard");
+        octaveDown.onClick = [this] { keyboard.shiftOctave (-1); };
+        octaveUp.onClick = [this] { keyboard.shiftOctave (1); };
+        clear.onClick = [this] { keyboard.clearNotes(); };
 
         keyboard.onWindowChanged = [this] { updateRange(); };
+        keyboard.onNoteLimit = [this] { flashHint ("A chord can have up to 8 notes. Remove one to add another."); };
+        slotButtons.onNothingToSave = [this] { flashHint ("Pick some notes on the keyboard first, then click an empty slot to save them."); };
         updateRange();
 
-        for (auto* child : std::initializer_list<juce::Component*> { &caption, &down, &range, &up })
+        for (auto* child : std::initializer_list<juce::Component*> { &keyboard, &slotButtons, &octaveCaption, &octaveRange, &hint, &octaveDown, &octaveUp, &clear })
             addAndMakeVisible (child);
     }
 
-    void OctaveButtons::updateRange()
+    void ChordPanel::refresh()
+    {
+        keyboard.refresh();
+        slotButtons.refresh();
+    }
+
+    void ChordPanel::flashHint (const juce::String& message)
+    {
+        hint.setText (message, juce::dontSendNotification);
+        hint.setColour (juce::Label::textColourId, colours::warm);
+        startTimer (3000);
+    }
+
+    void ChordPanel::timerCallback()
+    {
+        stopTimer();
+        hint.setText (defaultHint, juce::dontSendNotification);
+        hint.setColour (juce::Label::textColourId, colours::textDim);
+    }
+
+    void ChordPanel::updateRange()
     {
         const auto low = keyboard.getLowestNote();
-        range.setText (juce::MidiMessage::getMidiNoteName (low, true, true, 3) + juce::String::fromUTF8 (" \xe2\x80\x93 ")
-                           + juce::MidiMessage::getMidiNoteName (low + ChordKeyboard::numKeys - 1, true, true, 3),
+        octaveRange.setText (juce::MidiMessage::getMidiNoteName (low, true, true, 3) + juce::String::fromUTF8 (" \xe2\x80\x93 ")
+                                 + juce::MidiMessage::getMidiNoteName (low + ChordKeyboard::numKeys - 1, true, true, 3),
             juce::dontSendNotification);
     }
 
-    void OctaveButtons::resized()
+    void ChordPanel::resized()
     {
+        constexpr int controlsWidth = 124;
+        constexpr int gap = 12;
+
         auto area = getLocalBounds();
-        caption.setBounds (area.removeFromTop (16));
-        auto row = area.removeFromTop (26);
-        down.setBounds (row.removeFromLeft (30));
-        up.setBounds (row.removeFromRight (30));
-        range.setBounds (row);
+        auto slotsRow = area.removeFromBottom (48);
+        slotButtons.setBounds (slotsRow);
+        area.removeFromBottom (4);
+        hint.setBounds (area.removeFromBottom (20));
+        area.removeFromBottom (6);
+
+        auto controls = area.removeFromLeft (controlsWidth);
+        area.removeFromLeft (gap);
+        keyboard.setBounds (area);
+
+        octaveCaption.setBounds (controls.removeFromTop (18));
+        auto row = controls.removeFromTop (28);
+        octaveDown.setBounds (row.removeFromLeft (28));
+        octaveUp.setBounds (row.removeFromRight (28));
+        octaveRange.setBounds (row);
+        controls.removeFromTop (10);
+        clear.setBounds (controls.removeFromTop (28));
     }
 }

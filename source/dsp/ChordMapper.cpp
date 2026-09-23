@@ -7,20 +7,6 @@ namespace chordify
 {
     namespace
     {
-        constexpr int major[] = { 0, 4, 7 };
-        constexpr int minor[] = { 0, 3, 7 };
-        constexpr int diminished[] = { 0, 3, 6 };
-        constexpr int augmented[] = { 0, 4, 8 };
-        constexpr int sus2[] = { 0, 2, 7 };
-        constexpr int sus4[] = { 0, 5, 7 };
-        constexpr int major7[] = { 0, 4, 7, 11 };
-        constexpr int minor7[] = { 0, 3, 7, 10 };
-        constexpr int dominant7[] = { 0, 4, 7, 10 };
-        constexpr int power[] = { 0, 7 };
-
-        // Same order as params::chordTypeNames
-        constexpr std::span<const int> chordTable[] = { major, minor, diminished, augmented, sus2, sus4, major7, minor7, dominant7, power };
-
         // Deterministic value in -1..1 per slot, so detune and panning are stable between renders
         float slotPattern (int slot, std::uint32_t salt)
         {
@@ -39,109 +25,19 @@ namespace chordify
         return 440.0 * std::exp2 ((note - 69.0) / 12.0);
     }
 
-    std::span<const int> chordIntervals (int chordType)
-    {
-        return chordTable[std::clamp (chordType, 0, (int) std::size (chordTable) - 1)];
-    }
-
-    Voices internalChord (float rootNote, int chordType, const Voices& previous)
-    {
-        const auto intervals = chordIntervals (chordType);
-
-        Voices voices {};
-        for (size_t i = 0; i < voices.size(); ++i)
-        {
-            if (i < intervals.size())
-                voices[i] = { rootNote + (float) intervals[i], true, true };
-            else if (previous[i].used)
-                voices[i] = { previous[i].note, true, false }; // dropped chord tone rings out
-        }
-        return voices;
-    }
-
-    Voices releaseAll (Voices voices)
-    {
-        for (auto& voice : voices)
-            voice.gated = false;
-        return voices;
-    }
-
-    //==============================================================================
-    void VoiceAllocator::noteOn (int note)
-    {
-        ++counter;
-
-        for (auto& slot : slots)
-        {
-            if (slot.note == note)
-            {
-                slot.gated = true;
-                slot.age = counter;
-                return;
-            }
-        }
-
-        const auto older = [] (const Slot& a, const Slot& b) { return a.age < b.age; };
-
-        // Prefer a free voice: never used first, otherwise the one released longest ago
-        Slot* chosen = nullptr;
-        for (auto& slot : slots)
-            if (! slot.gated && (chosen == nullptr || (slot.note < 0 && chosen->note >= 0) || ((slot.note < 0) == (chosen->note < 0) && older (slot, *chosen))))
-                chosen = &slot;
-
-        // Every voice is held: steal the one held the longest
-        if (chosen == nullptr)
-            chosen = &*std::min_element (slots.begin(), slots.end(), older);
-
-        *chosen = { note, true, counter };
-    }
-
-    void VoiceAllocator::noteOff (int note)
-    {
-        ++counter;
-
-        for (auto& slot : slots)
-        {
-            if (slot.note == note && slot.gated)
-            {
-                slot.gated = false;
-                slot.age = counter;
-            }
-        }
-    }
-
-    void VoiceAllocator::allNotesOff()
-    {
-        for (auto& slot : slots)
-            slot.gated = false;
-    }
-
-    void VoiceAllocator::reset()
-    {
-        slots = {};
-        counter = 0;
-        pitchBend = 0.0f;
-    }
-
-    Voices VoiceAllocator::getVoices() const
+    Voices chordFromNotes (const std::bitset<128>& notes, const Voices& previous)
     {
         Voices voices {};
-        for (size_t i = 0; i < slots.size(); ++i)
-            if (slots[i].note >= 0)
-                voices[i] = { (float) slots[i].note + pitchBend * bendRangeSemitones, true, slots[i].gated };
+        size_t next = 0;
+        for (size_t note = 0; note < notes.size() && next < voices.size(); ++note)
+            if (notes[note])
+                voices[next++] = { (float) note, true, true };
+
+        for (; next < voices.size(); ++next)
+            if (previous[next].used)
+                voices[next] = { previous[next].note, true, false }; // no longer in the chord: ring out
+
         return voices;
-    }
-
-    std::optional<float> VoiceAllocator::lastHeldNote() const
-    {
-        const Slot* latest = nullptr;
-        for (const auto& slot : slots)
-            if (slot.gated && (latest == nullptr || slot.age > latest->age))
-                latest = &slot;
-
-        if (latest == nullptr)
-            return std::nullopt;
-        return (float) latest->note + pitchBend * bendRangeSemitones;
     }
 
     //==============================================================================

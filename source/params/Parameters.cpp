@@ -23,37 +23,14 @@ namespace params
                 .withLabel (unit)
                 .withStringFromValueFunction ([decimals] (float value, int) { return juce::String (value, decimals); });
         }
-
-        juce::String noteName (int note, int)
-        {
-            return juce::MidiMessage::getMidiNoteName (note, true, true, 3);
-        }
-
-        int noteFromName (const juce::String& text)
-        {
-            // Accept either a MIDI number ("48") or a note name ("C3", "F#2")
-            if (text.containsOnly ("0123456789"))
-                return text.getIntValue();
-
-            for (int note = 0; note < 128; ++note)
-                if (noteName (note, 0).equalsIgnoreCase (text.trim()))
-                    return note;
-
-            return 48;
-        }
     }
 
     juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     {
         juce::AudioProcessorValueTreeState::ParameterLayout layout;
 
-        layout.add (std::make_unique<juce::AudioParameterChoice> (pid (id::engine), "Engine", engineNames, 0));
-
-        // Chord
-        layout.add (std::make_unique<juce::AudioParameterChoice> (pid (id::chordSource), "Chord Source", chordSourceNames, 0));
-        layout.add (std::make_unique<juce::AudioParameterInt> (pid (id::root), "Root", 24, 96, 48,
-            juce::AudioParameterIntAttributes().withStringFromValueFunction (noteName).withValueFromStringFunction (noteFromName)));
-        layout.add (std::make_unique<juce::AudioParameterChoice> (pid (id::chordType), "Chord Type", chordTypeNames, 0));
+        // Chord: which chord plays; automate it to sequence slots
+        layout.add (std::make_unique<juce::AudioParameterChoice> (pid (id::chordSlot), "Chord Slot", chordSlotNames, pianoSlot));
 
         // Voicing
         layout.add (std::make_unique<juce::AudioParameterInt> (pid (id::harmonics), "Harmonics", 1, 16, 8));

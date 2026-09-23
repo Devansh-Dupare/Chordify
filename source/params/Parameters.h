@@ -8,10 +8,7 @@ namespace params
 {
     namespace id
     {
-        inline constexpr auto engine = "engine";
-        inline constexpr auto chordSource = "chordSource";
-        inline constexpr auto root = "root";
-        inline constexpr auto chordType = "chordType";
+        inline constexpr auto chordSlot = "chordSlot";
         inline constexpr auto harmonics = "harmonics";
         inline constexpr auto detune = "detune";
         inline constexpr auto spread = "spread";
@@ -26,25 +23,13 @@ namespace params
         inline constexpr auto output = "output";
     }
 
-    enum class Engine
-    {
-        resonator,
-        spectral
-    };
-
-    enum class ChordSource
-    {
-        internal, // root + chordType parameters
-        midi,     // notes held in the host's MIDI track, one chord tone per key
-        midiRoot  // the last key held sets the root; chordType builds the chord on it
-    };
+    // Chord Slot: 0 plays the notes selected on the piano, 1..numSlots play a saved slot
+    inline constexpr int numSlots = 8;
+    inline constexpr int pianoSlot = 0;
 
     // Choice lists; the order is part of the saved state, so only ever append
-    inline const juce::StringArray engineNames { "Resonator", "Spectral" };
-    inline const juce::StringArray chordSourceNames { "Internal", "MIDI", "MIDI Root" };
     inline const juce::StringArray timbreNames { "All Harmonics", "Odd Harmonics" };
-    inline const juce::StringArray chordTypeNames { "Major", "Minor", "Diminished", "Augmented", "Sus2", "Sus4", "Major 7", "Minor 7", "Dominant 7", "Power" };
-    inline const juce::StringArray chordTypeShortNames { "Maj", "Min", "Dim", "Aug", "Sus2", "Sus4", "Maj7", "Min7", "7", "5" }; // UI buttons, same order
+    inline const juce::StringArray chordSlotNames { "Piano", "Slot 1", "Slot 2", "Slot 3", "Slot 4", "Slot 5", "Slot 6", "Slot 7", "Slot 8" };
 
     juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 }

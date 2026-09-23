@@ -101,16 +101,23 @@ namespace ui
     {
         auto area = getLocalBounds().withTrimmedTop (titleHeight).reduced (0, padding / 2);
 
-        int used = 0;
+        int used = 0, fillers = 0;
         for (const auto& [item, width] : items)
+        {
             used += width;
-        const auto gap = std::max (padding, (area.getWidth() - used) / ((int) items.size() + 1));
+            fillers += width == fillWidth ? 1 : 0;
+        }
+
+        const auto spare = area.getWidth() - used;
+        const auto gap = fillers > 0 ? padding : std::max (padding, spare / ((int) items.size() + 1));
+        const auto fillerWidth = fillers > 0 ? (spare - gap * ((int) items.size() + 1)) / fillers : 0;
 
         auto x = area.getX() + gap;
         for (const auto& [item, width] : items)
         {
-            item->setBounds (x, area.getY(), width, area.getHeight());
-            x += width + gap;
+            const auto itemWidth = width == fillWidth ? fillerWidth : width;
+            item->setBounds (x, area.getY(), itemWidth, area.getHeight());
+            x += itemWidth + gap;
         }
     }
 

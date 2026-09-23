@@ -7,6 +7,7 @@
 #include "dsp/ToneFilters.h"
 #include "params/Parameters.h"
 #include "params/Presets.h"
+#include "state/ChordSlots.h"
 #include <bitset>
 
 #if (MSVC)
@@ -47,22 +48,17 @@ public:
 
     juce::AudioProcessorValueTreeState& getParameterTree() { return parameters; }
 
-    // Notes currently held on the incoming MIDI stream. Safe to call from any thread.
-    std::bitset<128> getHeldNotes() const;
+    // The piano selection and saved chord slots; the Chord Slot parameter picks which one plays
+    ChordSlots& getChordSlots() { return chordSlots; }
 
-    // The chord currently sounding (held voices, rounded to the nearest note) and its root when it
-    // was built from a root + chord type (-1 in MIDI mode or when nothing is held). Any thread.
+    // The chord the audio thread is currently playing. Safe to call from any thread.
     std::bitset<128> getChordNotes() const;
-    int getChordRoot() const { return chordRoot.load (std::memory_order_relaxed); }
 
     // Output peak per channel since the last call (resets it). For meters on the message thread.
     std::array<float, 2> takeOutputPeaks();
 
 private:
-    void updateHeldNotes (const juce::MidiBuffer& midi);
-    void handleMidiEvent (const juce::MidiMessage& message);
     void updateEngine();
-    void renderSegment (juce::AudioBuffer<float>& buffer, int start, int numSamples);
 
     juce::AudioProcessorValueTreeState parameters { *this, nullptr, "Chordify", params::createLayout() };
 
@@ -73,9 +69,7 @@ private:
     struct ParameterValues
     {
         explicit ParameterValues (juce::AudioProcessorValueTreeState&);
-        std::atomic<float>& chordSource;
-        std::atomic<float>& root;
-        std::atomic<float>& chordType;
+        std::atomic<float>& chordSlot;
         std::atomic<float>& harmonics;
         std::atomic<float>& detune;
         std::atomic<float>& spread;
@@ -91,15 +85,13 @@ private:
     };
     ParameterValues parameterValues { parameters };
 
-    // The Spectral engine arrives in Phase 4; until then both modes use the resonator bank
+    ChordSlots chordSlots;
     chordify::ResonatorBank resonatorBank;
-    chordify::Engine* engine = &resonatorBank;
 
     chordify::InputHighPass inputHighPass;
     chordify::Exciter exciter;
     chordify::TiltEq tiltEq;
-    chordify::VoiceAllocator midiVoices;
-    chordify::Voices chordVoices {}; // last chord built from root + chord type (Internal / MIDI Root)
+    chordify::Voices chordVoices {}; // voices of the chord playing now (released ones ring out)
 
     // Partials are only recomputed when the chord or voicing actually changes
     struct PartialInputs
@@ -115,13 +107,8 @@ private:
     juce::SmoothedValue<float> mixSmoothed;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> outputGainSmoothed;
 
-    void publishChord (const chordify::Voices& voices, int root);
-    std::array<std::atomic<std::uint64_t>, 2> chordNotes {};
-    std::atomic<int> chordRoot { -1 };
+    std::atomic<std::uint64_t> playingChord { ChordSlots::pack ({}) }; // packed like ChordSlots
     std::array<std::atomic<float>, 2> outputPeaks {};
-
-    // Written by the audio thread, read by the UI: bit n of word n / 64 is MIDI note n
-    std::array<std::atomic<std::uint64_t>, 2> heldNotes {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };

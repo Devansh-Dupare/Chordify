@@ -7,25 +7,17 @@ namespace
     constexpr int headerHeight = 44;
     constexpr int displayHeight = 68;
     constexpr int sectionHeight = 150;
+    constexpr int chordSectionHeight = 250;
+    constexpr int minContentWidth = 860;
     constexpr int meterWidth = 210;
-    constexpr int keyboardWidth = 14 * 30; // two octaves of 30 px white keys
-    constexpr int chordTypeButtonsWidth = ui::ChordTypeButtons::columns * 56;
-
-    juce::String noteName (int note)
-    {
-        return juce::MidiMessage::getMidiNoteName (note, true, true, 3);
-    }
 }
 
 //==============================================================================
 PluginEditor::PluginEditor (PluginProcessor& p)
     : AudioProcessorEditor (&p),
       processorRef (p),
-      engine (p.getParameterTree(), params::id::engine),
-      chordSource (p.getParameterTree(), params::id::chordSource),
+      chordPanel (p.getParameterTree(), p.getChordSlots()),
       timbre (p.getParameterTree(), params::id::timbre),
-      keyboard (p.getParameterTree(), [&p] { return ui::ChordKeyboard::SoundingChord { p.getChordNotes(), p.getChordRoot() }; }),
-      chordTypeButtons (p.getParameterTree()),
       harmonics (p.getParameterTree(), params::id::harmonics),
       brightness (p.getParameterTree(), params::id::brightness),
       detune (p.getParameterTree(), params::id::detune),
@@ -52,16 +44,11 @@ PluginEditor::PluginEditor (PluginProcessor& p)
     };
     syncPresetBox();
     addAndMakeVisible (presetBox);
-    addAndMakeVisible (engine);
 
     addAndMakeVisible (chordDisplay);
     addAndMakeVisible (meter);
 
-    chordControls.add (chordSource);
-    chordControls.add (octaveButtons);
-    chordSection.addItem (chordControls, ui::Choice::preferredWidth);
-    chordSection.addItem (keyboard, keyboardWidth);
-    chordSection.addItem (chordTypeButtons, chordTypeButtonsWidth);
+    chordSection.addItem (chordPanel, ui::Section::fillWidth);
 
     voicingSection.addItem (timbre, ui::Choice::preferredWidth);
     for (auto* knob : { &harmonics, &brightness, &detune, &spread })
@@ -89,10 +76,10 @@ PluginEditor::PluginEditor (PluginProcessor& p)
     };
    #endif
 
-    const auto contentWidth = std::max ({ chordSection.getMinimumWidth(), voicingSection.getMinimumWidth(),
+    const auto contentWidth = std::max ({ minContentWidth, voicingSection.getMinimumWidth(),
         resonanceSection.getMinimumWidth() + gap + outputSection.getMinimumWidth() });
     setSize (2 * margin + contentWidth,
-        2 * margin + headerHeight + gap + displayHeight + 3 * (gap + sectionHeight));
+        2 * margin + headerHeight + gap + displayHeight + (gap + chordSectionHeight) + 2 * (gap + sectionHeight));
 
     // Last, so the change propagates to every child added above (sliders rebuild their value boxes)
     setLookAndFeel (&lookAndFeel);
@@ -110,7 +97,7 @@ PluginEditor::~PluginEditor()
 void PluginEditor::timerCallback()
 {
     meter.update (processorRef.takeOutputPeaks());
-    keyboard.refresh();
+    chordPanel.refresh();
     updateChordDisplay();
     syncPresetBox();
 }
@@ -127,58 +114,18 @@ void PluginEditor::syncPresetBox()
 
 void PluginEditor::updateChordDisplay()
 {
-    auto& tree = processorRef.getParameterTree();
-    const auto source = (params::ChordSource) juce::roundToInt (tree.getRawParameterValue (params::id::chordSource)->load());
-    const auto type = juce::roundToInt (tree.getRawParameterValue (params::id::chordType)->load());
+    // Read from the slots and Chord Slot rather than the audio thread, so it's right even while
+    // no audio is being processed
+    const auto active = juce::roundToInt (processorRef.getParameterTree().getRawParameterValue (params::id::chordSlot)->load());
+    const auto notes = processorRef.getChordSlots().notesFor (active);
 
-    // In Internal mode read the chord straight from the parameters, so the name is right even while
-    // no audio is being processed; the MIDI modes show what the processor is playing
-    auto notes = processorRef.getChordNotes();
-    auto rootNote = processorRef.getChordRoot();
-    if (source == params::ChordSource::internal)
-    {
-        rootNote = juce::roundToInt (tree.getRawParameterValue (params::id::root)->load());
-        notes.reset();
-        for (auto interval : chordify::chordIntervals (type))
-            notes[(size_t) std::min (rootNote + interval, 127)] = true;
-    }
+    const auto name = notes.any() ? ChordSlots::noteNames (notes).replace (" ", juce::String::fromUTF8 ("  \xc2\xb7  "))
+                                  : juce::String::fromUTF8 ("\xe2\x80\x94"); // em dash
+    const auto detail = notes.none() ? juce::String ("No notes: pick some on the keyboard") : juce::String();
+    const auto footnote = active == params::pianoSlot ? juce::String ("Playing the notes on the keyboard")
+                                                      : "Playing slot " + juce::String (active);
 
-    juce::StringArray noteNames;
-    for (int note = 0; note < 128; ++note)
-        if (notes[(size_t) note])
-            noteNames.add (noteName (note));
-
-    juce::String name, detail;
-    if (noteNames.isEmpty())
-    {
-        name = juce::String::fromUTF8 ("\xe2\x80\x94"); // em dash
-        detail = source == params::ChordSource::internal ? "" : "Waiting for MIDI notes";
-    }
-    else if (rootNote >= 0)
-    {
-        name = noteName (rootNote) + " " + params::chordTypeNames[type];
-        detail = noteNames.joinIntoString (juce::String::fromUTF8 ("  \xc2\xb7  "));
-    }
-    else
-    {
-        name = noteNames.joinIntoString (" ");
-        detail = "MIDI voicing";
-    }
-
-    juce::StringArray footnotes;
-    footnotes.add ("Chord source: " + params::chordSourceNames[(int) source]);
-
-    juce::StringArray heldNames;
-    const auto held = processorRef.getHeldNotes();
-    for (int note = 0; note < 128; ++note)
-        if (held[(size_t) note])
-            heldNames.add (noteName (note));
-    if (! heldNames.isEmpty())
-        footnotes.add ("MIDI in: " + heldNames.joinIntoString (" "));
-    if (juce::roundToInt (tree.getRawParameterValue (params::id::engine)->load()) == (int) params::Engine::spectral)
-        footnotes.add ("Spectral engine not built yet, using Resonator");
-
-    chordDisplay.setChord (name, detail, footnotes.joinIntoString (juce::String::fromUTF8 ("   \xc2\xb7   ")));
+    chordDisplay.setChord (name, detail, footnote);
 }
 
 void PluginEditor::paint (juce::Graphics& g)
@@ -204,9 +151,7 @@ void PluginEditor::resized()
     inspectButton.setBounds (header.removeFromRight (70).withSizeKeepingCentre (70, 26));
     header.removeFromRight (gap);
    #endif
-    engine.setBounds (header.removeFromRight (ui::Choice::preferredWidth).withTrimmedBottom (2));
-    header.removeFromRight (gap);
-    presetBox.setBounds (header.removeFromRight (220).withTrimmedTop (16).withTrimmedBottom (2));
+    presetBox.setBounds (header.removeFromRight (220).withSizeKeepingCentre (220, 28));
 
     area.removeFromTop (gap);
     auto display = area.removeFromTop (displayHeight);
@@ -215,7 +160,7 @@ void PluginEditor::resized()
     chordDisplay.setBounds (display);
 
     area.removeFromTop (gap);
-    chordSection.setBounds (area.removeFromTop (sectionHeight));
+    chordSection.setBounds (area.removeFromTop (chordSectionHeight));
 
     area.removeFromTop (gap);
     voicingSection.setBounds (area.removeFromTop (sectionHeight));

@@ -27,7 +27,6 @@ private:
 
     // Header
     juce::ComboBox presetBox;
-    ui::Choice engine;
 
     // Display strip
     ui::ChordDisplay chordDisplay;
@@ -35,11 +34,8 @@ private:
 
     // Sections
     ui::Section chordSection { "Chord" }, voicingSection { "Voicing" }, resonanceSection { "Resonance" }, outputSection { "Output" };
-    ui::Stack chordControls;
-    ui::Choice chordSource, timbre;
-    ui::ChordKeyboard keyboard;
-    ui::OctaveButtons octaveButtons { keyboard };
-    ui::ChordTypeButtons chordTypeButtons;
+    ui::ChordPanel chordPanel;
+    ui::Choice timbre;
     ui::Knob harmonics, brightness, detune, spread;
     ui::Knob decay, glide, excite;
     ui::Knob inputHpf, tone, mix, output;

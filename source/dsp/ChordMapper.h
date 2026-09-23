@@ -1,9 +1,8 @@
 #pragma once
 
 #include <array>
+#include <bitset>
 #include <cstdint>
-#include <optional>
-#include <span>
 
 namespace chordify
 {
@@ -11,11 +10,8 @@ namespace chordify
     inline constexpr int maxHarmonics = 16;
     inline constexpr int maxPartials = maxVoices * maxHarmonics;
 
-    // f = 440 * 2^((n - 69) / 12); fractional notes allow pitch bend and detune
+    // f = 440 * 2^((n - 69) / 12); fractional notes allow detune
     double midiNoteToHz (double note);
-
-    // Semitone offsets from the root for each entry of params::chordTypeNames
-    std::span<const int> chordIntervals (int chordType);
 
     // Voice and PartialSettings compare floats exactly on purpose: equality only detects
     // "nothing changed since last block", so the partials can skip being recomputed.
@@ -27,54 +23,22 @@ namespace chordify
     // A chord tone: its fundamental and whether it is currently fed with input
     struct Voice
     {
-        float note = 0.0f;  // MIDI note number, fractional after pitch bend
+        float note = 0.0f;  // MIDI note number
         bool used = false;  // false until the voice has ever sounded
-        bool gated = false; // true while the note is held; released voices ring out
+        bool gated = false; // true while the note is in the chord; released voices ring out
 
         bool operator== (const Voice&) const = default;
     };
 
     using Voices = std::array<Voice, maxVoices>;
 
-    // Chord tones from the internal root + chord type parameters (all gated). Voices that were
-    // part of the previous chord but not this one keep their note, released, so they ring out.
-    Voices internalChord (float rootNote, int chordType, const Voices& previous);
+    // Maximum number of notes in a chord (one voice per note)
+    inline constexpr int maxChordNotes = maxVoices;
 
-    // Every voice released (keeping its pitch), so the chord rings out
-    Voices releaseAll (Voices voices);
-
-    // Assigns incoming MIDI notes to voices with last-note priority: once every voice is held,
-    // a new note steals the voice held the longest. Otherwise it takes a never-used voice, or
-    // the voice released the longest ago, so recent tails keep ringing.
-    class VoiceAllocator
-    {
-    public:
-        void noteOn (int note);
-        void noteOff (int note);
-        void allNotesOff();
-        void reset();
-
-        // Pitch wheel position in -1..1, mapped to +/- bendRangeSemitones
-        void setPitchBend (float amount) { pitchBend = amount; }
-        static constexpr float bendRangeSemitones = 2.0f;
-
-        Voices getVoices() const;
-
-        // The most recently pressed note that is still held, with pitch bend applied
-        std::optional<float> lastHeldNote() const;
-
-    private:
-        struct Slot
-        {
-            int note = -1;
-            bool gated = false;
-            std::uint64_t age = 0; // order of the last note-on / note-off
-        };
-
-        std::array<Slot, maxVoices> slots {};
-        std::uint64_t counter = 0;
-        float pitchBend = 0.0f;
-    };
+    // One voice per selected note, lowest note first, so a chord change glides each voice to the
+    // note in the same position of the new chord. Voices that were sounding before but aren't
+    // needed now keep their note, released, so they ring out. Notes beyond maxChordNotes are ignored.
+    Voices chordFromNotes (const std::bitset<128>& notes, const Voices& previous);
 
     // Per-partial targets, laid out as [voice * maxHarmonics + harmonicIndex] so each resonator
     // keeps the same slot while its voice holds a note (letting frequencies glide smoothly).
