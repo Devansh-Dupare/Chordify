@@ -2,76 +2,78 @@
 
 namespace
 {
-    constexpr int margin = 12;
-    constexpr int headerHeight = 40;
-    constexpr int choiceHeight = 50;
-    constexpr int knobWidth = 90;
-    constexpr int knobHeight = 110;
-    constexpr int knobsPerRow = 5;
-    constexpr int footerHeight = 30;
+    constexpr int margin = 14;
+    constexpr int gap = 10;
+    constexpr int headerHeight = 44;
+    constexpr int displayHeight = 68;
+    constexpr int sectionHeight = 150;
+    constexpr int meterWidth = 210;
 
-    juce::String parameterName (juce::AudioProcessorValueTreeState& tree, const juce::String& paramId)
+    juce::String noteName (int note)
     {
-        auto* param = tree.getParameter (paramId);
-        jassert (param != nullptr);
-        return param->getName (32);
+        return juce::MidiMessage::getMidiNoteName (note, true, true, 3);
     }
-}
-
-PluginEditor::Knob::Knob (juce::AudioProcessorValueTreeState& tree, const juce::String& paramId)
-    : attachment (tree, paramId, slider)
-{
-    label.setText (parameterName (tree, paramId), juce::dontSendNotification);
-    label.setJustificationType (juce::Justification::centred);
-    slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, knobWidth - 10, 20);
-    addAndMakeVisible (label);
-    addAndMakeVisible (slider);
-}
-
-void PluginEditor::Knob::resized()
-{
-    auto area = getLocalBounds();
-    label.setBounds (area.removeFromTop (20));
-    slider.setBounds (area);
-}
-
-PluginEditor::Choice::Choice (juce::AudioProcessorValueTreeState& tree, const juce::String& paramId)
-    : attachment (tree, paramId, box)
-{
-    // The attachment only selects an item; the items themselves come from the parameter
-    if (auto* param = dynamic_cast<juce::AudioParameterChoice*> (tree.getParameter (paramId)))
-        box.addItemList (param->choices, 1);
-    box.setSelectedItemIndex (juce::roundToInt (tree.getRawParameterValue (paramId)->load()), juce::dontSendNotification);
-
-    label.setText (parameterName (tree, paramId), juce::dontSendNotification);
-    label.setJustificationType (juce::Justification::centredLeft);
-    addAndMakeVisible (label);
-    addAndMakeVisible (box);
-}
-
-void PluginEditor::Choice::resized()
-{
-    auto area = getLocalBounds();
-    label.setBounds (area.removeFromTop (20));
-    box.setBounds (area.reduced (0, 2));
 }
 
 //==============================================================================
 PluginEditor::PluginEditor (PluginProcessor& p)
-    : AudioProcessorEditor (&p), processorRef (p)
+    : AudioProcessorEditor (&p),
+      processorRef (p),
+      engine (p.getParameterTree(), params::id::engine),
+      chordSource (p.getParameterTree(), params::id::chordSource),
+      chordType (p.getParameterTree(), params::id::chordType),
+      timbre (p.getParameterTree(), params::id::timbre),
+      root (p.getParameterTree(), params::id::root),
+      harmonics (p.getParameterTree(), params::id::harmonics),
+      brightness (p.getParameterTree(), params::id::brightness),
+      detune (p.getParameterTree(), params::id::detune),
+      spread (p.getParameterTree(), params::id::spread),
+      decay (p.getParameterTree(), params::id::decay),
+      glide (p.getParameterTree(), params::id::glide),
+      excite (p.getParameterTree(), params::id::excite),
+      inputHpf (p.getParameterTree(), params::id::inputHpf),
+      tone (p.getParameterTree(), params::id::tone, 0.0f),
+      mix (p.getParameterTree(), params::id::mix),
+      output (p.getParameterTree(), params::id::output, 0.0f)
 {
-    auto& tree = processorRef.getParameterTree();
+    for (int i = 0; i < processorRef.getNumPrograms(); ++i)
+        presetBox.addItem (processorRef.getProgramName (i), i + 1);
+    presetBox.setTooltip ("Factory presets");
+    presetBox.onChange = [this] {
+        const auto index = presetBox.getSelectedItemIndex();
+        if (index >= 0 && index != processorRef.getCurrentProgram())
+        {
+            processorRef.setCurrentProgram (index);
+            processorRef.updateHostDisplay (juce::AudioProcessor::ChangeDetails().withProgramChanged (true));
+        }
+        shownProgram = index;
+    };
+    syncPresetBox();
+    addAndMakeVisible (presetBox);
+    addAndMakeVisible (engine);
 
-    for (auto* paramId : { params::id::engine, params::id::chordSource, params::id::chordType, params::id::timbre })
-        addAndMakeVisible (*choices.emplace_back (std::make_unique<Choice> (tree, paramId)));
+    addAndMakeVisible (chordDisplay);
+    addAndMakeVisible (meter);
 
-    for (auto* paramId : { params::id::root, params::id::harmonics, params::id::detune, params::id::spread, params::id::glide, params::id::decay,
-             params::id::excite, params::id::brightness, params::id::inputHpf, params::id::tone, params::id::mix, params::id::output })
-        addAndMakeVisible (*knobs.emplace_back (std::make_unique<Knob> (tree, paramId)));
+    chordChoices.add (chordSource);
+    chordChoices.add (chordType);
+    chordSection.addItem (chordChoices, ui::Choice::preferredWidth);
+    chordSection.addItem (root, ui::Knob::preferredWidth);
 
-    midiNotesLabel.setJustificationType (juce::Justification::centredLeft);
-    addAndMakeVisible (midiNotesLabel);
+    voicingSection.addItem (timbre, ui::Choice::preferredWidth);
+    for (auto* knob : { &harmonics, &brightness, &detune, &spread })
+        voicingSection.addItem (*knob, ui::Knob::preferredWidth);
 
+    for (auto* knob : { &decay, &glide, &excite })
+        resonanceSection.addItem (*knob, ui::Knob::preferredWidth);
+
+    for (auto* knob : { &inputHpf, &tone, &mix, &output })
+        outputSection.addItem (*knob, ui::Knob::preferredWidth);
+
+    for (auto* section : { &chordSection, &voicingSection, &resonanceSection, &outputSection })
+        addAndMakeVisible (*section);
+
+   #if JUCE_DEBUG
     addAndMakeVisible (inspectButton);
     inspectButton.onClick = [&] {
         if (!inspector)
@@ -82,46 +84,100 @@ PluginEditor::PluginEditor (PluginProcessor& p)
 
         inspector->setVisible (true);
     };
+   #endif
 
-    const auto rows = ((int) knobs.size() + knobsPerRow - 1) / knobsPerRow;
-    setSize (2 * margin + knobsPerRow * knobWidth,
-        2 * margin + headerHeight + choiceHeight + rows * knobHeight + footerHeight);
+    const auto topRowWidth = chordSection.getMinimumWidth() + gap + voicingSection.getMinimumWidth();
+    setSize (2 * margin + topRowWidth,
+        2 * margin + headerHeight + gap + displayHeight + 2 * (gap + sectionHeight));
 
-    timerCallback();
-    startTimerHz (20);
+    // Last, so the change propagates to every child added above (sliders rebuild their value boxes)
+    setLookAndFeel (&lookAndFeel);
+
+    updateChordDisplay();
+    startTimerHz (30);
 }
 
 PluginEditor::~PluginEditor()
 {
     stopTimer();
+    setLookAndFeel (nullptr);
 }
 
 void PluginEditor::timerCallback()
 {
-    const auto held = processorRef.getHeldNotes();
+    meter.update (processorRef.takeOutputPeaks());
+    updateChordDisplay();
+    syncPresetBox();
+}
 
-    juce::StringArray names;
+void PluginEditor::syncPresetBox()
+{
+    // The host can change the program too
+    if (const auto current = processorRef.getCurrentProgram(); current != shownProgram)
+    {
+        shownProgram = current;
+        presetBox.setSelectedItemIndex (current, juce::dontSendNotification);
+    }
+}
+
+void PluginEditor::updateChordDisplay()
+{
+    auto& tree = processorRef.getParameterTree();
+    const auto source = (params::ChordSource) juce::roundToInt (tree.getRawParameterValue (params::id::chordSource)->load());
+    const auto notes = processorRef.getChordNotes();
+    const auto rootNote = processorRef.getChordRoot();
+
+    juce::StringArray noteNames;
+    for (int note = 0; note < 128; ++note)
+        if (notes[(size_t) note])
+            noteNames.add (noteName (note));
+
+    juce::String name, detail;
+    if (noteNames.isEmpty())
+    {
+        name = juce::String::fromUTF8 ("\xe2\x80\x94"); // em dash
+        detail = source == params::ChordSource::internal ? "" : "Waiting for MIDI notes";
+    }
+    else if (rootNote >= 0)
+    {
+        const auto type = juce::roundToInt (tree.getRawParameterValue (params::id::chordType)->load());
+        name = noteName (rootNote) + " " + params::chordTypeNames[type];
+        detail = noteNames.joinIntoString (juce::String::fromUTF8 ("  \xc2\xb7  "));
+    }
+    else
+    {
+        name = noteNames.joinIntoString (" ");
+        detail = "MIDI voicing";
+    }
+
+    juce::StringArray footnotes;
+    footnotes.add ("Chord source: " + params::chordSourceNames[(int) source]);
+
+    juce::StringArray heldNames;
+    const auto held = processorRef.getHeldNotes();
     for (int note = 0; note < 128; ++note)
         if (held[(size_t) note])
-            names.add (juce::MidiMessage::getMidiNoteName (note, true, true, 3));
+            heldNames.add (noteName (note));
+    if (! heldNames.isEmpty())
+        footnotes.add ("MIDI in: " + heldNames.joinIntoString (" "));
+    if (juce::roundToInt (tree.getRawParameterValue (params::id::engine)->load()) == (int) params::Engine::spectral)
+        footnotes.add ("Spectral engine not built yet, using Resonator");
 
-    const auto text = "MIDI in: " + (names.isEmpty() ? juce::String ("-") : names.joinIntoString (" "));
-    if (midiNotesLabel.getText() != text)
-        midiNotesLabel.setText (text, juce::dontSendNotification);
+    chordDisplay.setChord (name, detail, footnotes.joinIntoString (juce::String::fromUTF8 ("   \xc2\xb7   ")));
 }
 
 void PluginEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (getLookAndFeel().findColour (juce::ResizableWindow::backgroundColourId));
+    g.fillAll (ui::colours::background);
 
     auto header = getLocalBounds().reduced (margin).removeFromTop (headerHeight);
-    g.setColour (juce::Colours::white);
-    g.setFont (juce::FontOptions (20.0f, juce::Font::bold));
+    g.setColour (ui::colours::text);
+    g.setFont (juce::FontOptions (24.0f, juce::Font::bold));
     g.drawText (PRODUCT_NAME_WITHOUT_VERSION, header, juce::Justification::centredLeft, false);
 
-    g.setColour (juce::Colours::grey);
+    g.setColour (ui::colours::textDim);
     g.setFont (juce::FontOptions (12.0f));
-    g.drawText (juce::String ("v" VERSION " ") + CMAKE_BUILD_TYPE, header.withTrimmedRight (80), juce::Justification::centredRight, false);
+    g.drawText (juce::String ("by Duphon  v" VERSION), header.withTrimmedLeft (122), juce::Justification::centredLeft, false);
 }
 
 void PluginEditor::resized()
@@ -129,19 +185,31 @@ void PluginEditor::resized()
     auto area = getLocalBounds().reduced (margin);
 
     auto header = area.removeFromTop (headerHeight);
-    inspectButton.setBounds (header.removeFromRight (70).reduced (0, 8));
+   #if JUCE_DEBUG
+    inspectButton.setBounds (header.removeFromRight (70).withSizeKeepingCentre (70, 26));
+    header.removeFromRight (gap);
+   #endif
+    engine.setBounds (header.removeFromRight (ui::Choice::preferredWidth).withTrimmedBottom (2));
+    header.removeFromRight (gap);
+    presetBox.setBounds (header.removeFromRight (220).withTrimmedTop (16).withTrimmedBottom (2));
 
-    auto choiceRow = area.removeFromTop (choiceHeight);
-    const auto choiceWidth = choiceRow.getWidth() / (int) choices.size();
-    for (auto& choice : choices)
-        choice->setBounds (choiceRow.removeFromLeft (choiceWidth).reduced (4, 0));
+    area.removeFromTop (gap);
+    auto display = area.removeFromTop (displayHeight);
+    meter.setBounds (display.removeFromRight (meterWidth).reduced (0, 10));
+    display.removeFromRight (gap);
+    chordDisplay.setBounds (display);
 
-    midiNotesLabel.setBounds (area.removeFromBottom (footerHeight));
+    area.removeFromTop (gap);
+    auto topRow = area.removeFromTop (sectionHeight);
+    chordSection.setBounds (topRow.removeFromLeft (chordSection.getMinimumWidth()));
+    topRow.removeFromLeft (gap);
+    voicingSection.setBounds (topRow);
 
-    for (size_t i = 0; i < knobs.size(); i += knobsPerRow)
-    {
-        auto row = area.removeFromTop (knobHeight);
-        for (size_t k = i; k < std::min (knobs.size(), i + knobsPerRow); ++k)
-            knobs[k]->setBounds (row.removeFromLeft (knobWidth));
-    }
+    area.removeFromTop (gap);
+    auto bottomRow = area.removeFromTop (sectionHeight);
+    const auto resonanceWidth = (bottomRow.getWidth() - gap) * resonanceSection.getMinimumWidth()
+                                / (resonanceSection.getMinimumWidth() + outputSection.getMinimumWidth());
+    resonanceSection.setBounds (bottomRow.removeFromLeft (resonanceWidth));
+    bottomRow.removeFromLeft (gap);
+    outputSection.setBounds (bottomRow);
 }

@@ -3,10 +3,9 @@
 #include "PluginProcessor.h"
 #include "BinaryData.h"
 #include "melatonin_inspector/melatonin_inspector.h"
+#include "ui/Widgets.h"
 
 //==============================================================================
-// Placeholder UI: one knob or dropdown per parameter plus a held-MIDI-notes readout.
-// The visual design pass happens in Phase 5.
 class PluginEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
@@ -18,35 +17,35 @@ public:
     void resized() override;
 
 private:
-    struct Knob : juce::Component
-    {
-        Knob (juce::AudioProcessorValueTreeState&, const juce::String& paramId);
-        void resized() override;
-
-        juce::Slider slider { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow };
-        juce::Label label;
-        juce::AudioProcessorValueTreeState::SliderAttachment attachment;
-    };
-
-    struct Choice : juce::Component
-    {
-        Choice (juce::AudioProcessorValueTreeState&, const juce::String& paramId);
-        void resized() override;
-
-        juce::ComboBox box;
-        juce::Label label;
-        juce::AudioProcessorValueTreeState::ComboBoxAttachment attachment;
-    };
-
     void timerCallback() override;
+    void updateChordDisplay();
+    void syncPresetBox();
 
     PluginProcessor& processorRef;
+    ui::LookAndFeel lookAndFeel;
 
-    std::vector<std::unique_ptr<Choice>> choices;
-    std::vector<std::unique_ptr<Knob>> knobs;
-    juce::Label midiNotesLabel;
+    // Header
+    juce::ComboBox presetBox;
+    ui::Choice engine;
 
+    // Display strip
+    ui::ChordDisplay chordDisplay;
+    ui::LevelMeter meter;
+
+    // Sections
+    ui::Section chordSection { "Chord" }, voicingSection { "Voicing" }, resonanceSection { "Resonance" }, outputSection { "Output" };
+    ui::Stack chordChoices;
+    ui::Choice chordSource, chordType, timbre;
+    ui::Knob root, harmonics, brightness, detune, spread;
+    ui::Knob decay, glide, excite;
+    ui::Knob inputHpf, tone, mix, output;
+
+    int shownProgram = -1;
+
+   #if JUCE_DEBUG
     std::unique_ptr<melatonin::Inspector> inspector;
     juce::TextButton inspectButton { "Inspect" };
+   #endif
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginEditor)
 };
