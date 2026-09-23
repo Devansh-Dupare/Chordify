@@ -83,6 +83,8 @@ namespace params
             skewedRange (20.0f, 1000.0f, 150.0f), 20.0f, withUnit ("Hz", 0)));
         layout.add (std::make_unique<juce::AudioParameterFloat> (pid (id::tone), "Tone",
             juce::NormalisableRange<float> { -100.0f, 100.0f }, 0.0f, withUnit ("%", 0)));
+        layout.add (std::make_unique<juce::AudioParameterFloat> (pid (id::output), "Output",
+            juce::NormalisableRange<float> { -24.0f, 12.0f }, 0.0f, withUnit ("dB", 1)));
 
         return layout;
     }

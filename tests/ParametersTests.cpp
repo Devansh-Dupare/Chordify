@@ -26,12 +26,12 @@ TEST_CASE ("Parameter layout", "[params]")
     {
         for (auto* paramId : { params::id::engine, params::id::chordSource, params::id::root, params::id::chordType,
                  params::id::harmonics, params::id::detune, params::id::spread, params::id::glide, params::id::decay,
-                 params::id::excite, params::id::brightness, params::id::timbre, params::id::mix, params::id::inputHpf, params::id::tone })
+                 params::id::excite, params::id::brightness, params::id::timbre, params::id::mix, params::id::inputHpf, params::id::tone, params::id::output })
         {
             INFO (paramId);
             CHECK (plugin.getParameterTree().getParameter (paramId) != nullptr);
         }
-        CHECK (plugin.getParameters().size() == 15);
+        CHECK (plugin.getParameters().size() == 16);
     }
 
     SECTION ("defaults")
@@ -291,4 +291,42 @@ TEST_CASE ("MIDI Root builds the chord type on the held key", "[chord]")
     const auto c3 = 60, cSharp3 = 61;
     CHECK (fundamentalLevels (minor, { c3 })[0] - fundamentalLevels (major, { c3 })[0] > 10.0);
     CHECK (fundamentalLevels (major, { cSharp3 })[0] - fundamentalLevels (minor, { cSharp3 })[0] > 10.0);
+}
+
+TEST_CASE ("Output gain scales the final output", "[output]")
+{
+    PluginProcessor plugin;
+    setValue (plugin, params::id::mix, 0.0f);
+    setValue (plugin, params::id::output, -6.0f);
+
+    std::vector<float> input (4800, 0.5f);
+    const auto out = renderThroughPlugin (plugin, input);
+    CHECK (out.back() == Catch::Approx (0.5f * juce::Decibels::decibelsToGain (-6.0f)).margin (1e-4));
+
+    const auto peaks = plugin.takeOutputPeaks();
+    CHECK (peaks[0] == Catch::Approx (0.5f * juce::Decibels::decibelsToGain (-6.0f)).margin (1e-3));
+    CHECK (plugin.takeOutputPeaks()[0] == 0.0f); // reading resets the meter
+}
+
+TEST_CASE ("The sounding chord is published for the UI", "[chord]")
+{
+    PluginProcessor plugin;
+    setValue (plugin, params::id::root, 57.0f);
+    setValue (plugin, params::id::chordType, 1.0f); // A minor
+    renderThroughPlugin (plugin, std::vector<float> (1024, 0.0f));
+
+    const auto notes = plugin.getChordNotes();
+    CHECK (notes.count() == 3);
+    CHECK (notes[57]);
+    CHECK (notes[60]);
+    CHECK (notes[64]);
+    CHECK (plugin.getChordRoot() == 57);
+
+    SECTION ("MIDI Root with no key held shows nothing")
+    {
+        setValue (plugin, params::id::chordSource, (float) params::ChordSource::midiRoot);
+        renderThroughPlugin (plugin, std::vector<float> (1024, 0.0f));
+        CHECK (plugin.getChordNotes().none());
+        CHECK (plugin.getChordRoot() == -1);
+    }
 }

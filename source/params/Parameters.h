@@ -23,6 +23,7 @@ namespace params
         inline constexpr auto mix = "mix";
         inline constexpr auto inputHpf = "inputHpf";
         inline constexpr auto tone = "tone";
+        inline constexpr auto output = "output";
     }
 
     enum class Engine

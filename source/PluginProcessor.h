@@ -4,6 +4,7 @@
 #include "dsp/ChordMapper.h"
 #include "dsp/Exciter.h"
 #include "dsp/ResonatorBank.h"
+#include "dsp/ToneFilters.h"
 #include "params/Parameters.h"
 #include <bitset>
 
@@ -48,6 +49,14 @@ public:
     // Notes currently held on the incoming MIDI stream. Safe to call from any thread.
     std::bitset<128> getHeldNotes() const;
 
+    // The chord currently sounding (held voices, rounded to the nearest note) and its root when it
+    // was built from a root + chord type (-1 in MIDI mode or when nothing is held). Any thread.
+    std::bitset<128> getChordNotes() const;
+    int getChordRoot() const { return chordRoot.load (std::memory_order_relaxed); }
+
+    // Output peak per channel since the last call (resets it). For meters on the message thread.
+    std::array<float, 2> takeOutputPeaks();
+
 private:
     void updateHeldNotes (const juce::MidiBuffer& midi);
     void handleMidiEvent (const juce::MidiMessage& message);
@@ -71,6 +80,9 @@ private:
         std::atomic<float>& brightness;
         std::atomic<float>& timbre;
         std::atomic<float>& mix;
+        std::atomic<float>& inputHpf;
+        std::atomic<float>& tone;
+        std::atomic<float>& output;
     };
     ParameterValues parameterValues { parameters };
 
@@ -78,7 +90,9 @@ private:
     chordify::ResonatorBank resonatorBank;
     chordify::Engine* engine = &resonatorBank;
 
+    chordify::InputHighPass inputHighPass;
     chordify::Exciter exciter;
+    chordify::TiltEq tiltEq;
     chordify::VoiceAllocator midiVoices;
     chordify::Voices chordVoices {}; // last chord built from root + chord type (Internal / MIDI Root)
 
@@ -94,6 +108,12 @@ private:
     double currentSampleRate = 48000.0;
     juce::AudioBuffer<float> monoInput, wetOutput;
     juce::SmoothedValue<float> mixSmoothed;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> outputGainSmoothed;
+
+    void publishChord (const chordify::Voices& voices, int root);
+    std::array<std::atomic<std::uint64_t>, 2> chordNotes {};
+    std::atomic<int> chordRoot { -1 };
+    std::array<std::atomic<float>, 2> outputPeaks {};
 
     // Written by the audio thread, read by the UI: bit n of word n / 64 is MIDI note n
     std::array<std::atomic<std::uint64_t>, 2> heldNotes {};

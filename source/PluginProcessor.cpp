@@ -30,7 +30,10 @@ PluginProcessor::ParameterValues::ParameterValues (juce::AudioProcessorValueTree
       excite (*tree.getRawParameterValue (params::id::excite)),
       brightness (*tree.getRawParameterValue (params::id::brightness)),
       timbre (*tree.getRawParameterValue (params::id::timbre)),
-      mix (*tree.getRawParameterValue (params::id::mix))
+      mix (*tree.getRawParameterValue (params::id::mix)),
+      inputHpf (*tree.getRawParameterValue (params::id::inputHpf)),
+      tone (*tree.getRawParameterValue (params::id::tone)),
+      output (*tree.getRawParameterValue (params::id::output))
 {
 }
 
@@ -101,6 +104,16 @@ void PluginProcessor::changeProgramName (int index, const juce::String& newName)
     juce::ignoreUnused (index, newName);
 }
 
+namespace
+{
+    // The stored dB value picks up float error from the 0..1 round trip (0 dB reads as 7e-7 dB),
+    // so round to 0.01 dB: 0 dB is then exactly unity gain and Mix 0% stays bit-exact
+    float outputGainFromDb (float db)
+    {
+        return juce::Decibels::decibelsToGain (std::round (db * 100.0f) / 100.0f);
+    }
+}
+
 //==============================================================================
 void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
@@ -112,6 +125,10 @@ void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     resonatorBank.prepare (sampleRate);
     exciter.setAmount (parameterValues.excite.load() / 100.0f);
     exciter.prepare (sampleRate);
+    inputHighPass.setCutoff (parameterValues.inputHpf.load());
+    inputHighPass.prepare (sampleRate);
+    tiltEq.setTone (parameterValues.tone.load() / 100.0f);
+    tiltEq.prepare (sampleRate);
     setLatencySamples (engine->getLatencySamples());
 
     midiVoices.reset();
@@ -125,6 +142,8 @@ void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 
     mixSmoothed.reset (sampleRate, 0.02);
     mixSmoothed.setCurrentAndTargetValue (parameterValues.mix.load() / 100.0f);
+    outputGainSmoothed.reset (sampleRate, 0.02);
+    outputGainSmoothed.setCurrentAndTargetValue (outputGainFromDb (parameterValues.output.load()));
 }
 
 void PluginProcessor::releaseResources()
@@ -200,6 +219,7 @@ void PluginProcessor::updateEngine()
 
     PartialInputs inputs;
     const auto chordType = juce::roundToInt (p.chordType.load());
+    int root = -1;
 
     switch ((params::ChordSource) juce::roundToInt (p.chordSource.load()))
     {
@@ -208,8 +228,11 @@ void PluginProcessor::updateEngine()
             break;
 
         case params::ChordSource::midiRoot:
-            if (const auto root = midiVoices.lastHeldNote())
-                chordVoices = chordify::internalChord (*root, chordType, chordVoices);
+            if (const auto heldRoot = midiVoices.lastHeldNote())
+            {
+                chordVoices = chordify::internalChord (*heldRoot, chordType, chordVoices);
+                root = juce::roundToInt (*heldRoot);
+            }
             else
                 chordVoices = chordify::releaseAll (chordVoices); // no key held: let the chord ring out
             inputs.voices = chordVoices;
@@ -217,10 +240,13 @@ void PluginProcessor::updateEngine()
 
         case params::ChordSource::internal:
         default:
-            chordVoices = chordify::internalChord ((float) juce::roundToInt (p.root.load()), chordType, chordVoices);
+            root = juce::roundToInt (p.root.load());
+            chordVoices = chordify::internalChord ((float) root, chordType, chordVoices);
             inputs.voices = chordVoices;
             break;
     }
+
+    publishChord (inputs.voices, root);
 
     inputs.settings.numHarmonics = juce::roundToInt (p.harmonics.load());
     inputs.settings.brightness = p.brightness.load() / 100.0f;
@@ -236,6 +262,9 @@ void PluginProcessor::updateEngine()
     }
 
     exciter.setAmount (p.excite.load() / 100.0f);
+    inputHighPass.setCutoff (p.inputHpf.load());
+    tiltEq.setTone (p.tone.load() / 100.0f);
+    outputGainSmoothed.setTargetValue (outputGainFromDb (p.output.load()));
     engine->setDecay (p.decay.load());
     engine->setGlide (p.glide.load() / 1000.0f);
     mixSmoothed.setTargetValue (p.mix.load() / 100.0f);
@@ -264,26 +293,71 @@ void PluginProcessor::renderSegment (juce::AudioBuffer<float>& buffer, int start
         for (int ch = 0; ch < numInputs; ++ch)
             juce::FloatVectorOperations::addWithMultiply (mono, buffer.getReadPointer (ch, first), 1.0f / (float) numInputs, n);
 
+        inputHighPass.process (mono, n);
         exciter.process (mono, mono, n);
 
         engine->process (mono, wetLeft, wetRight, n);
+        tiltEq.process (wetLeft, wetRight, n);
 
         if (numOutputs == 1)
             juce::FloatVectorOperations::add (wetLeft, wetRight, n); // fold the stereo wet signal to mono
 
+        std::array<float, 2> peaks {};
         for (int i = 0; i < n; ++i)
         {
             const auto wetAmount = mixSmoothed.getNextValue();
+            const auto gain = outputGainSmoothed.getNextValue();
             for (int ch = 0; ch < numOutputs; ++ch)
             {
                 auto* out = buffer.getWritePointer (ch, first + i);
                 const auto wet = ch == 1 ? wetRight[i] : (numOutputs == 1 ? 0.5f * wetLeft[i] : wetLeft[i]);
-                *out = *out * (1.0f - wetAmount) + wet * wetAmount;
+                *out = (*out * (1.0f - wetAmount) + wet * wetAmount) * gain;
+                peaks[(size_t) std::min (ch, 1)] = std::max (peaks[(size_t) std::min (ch, 1)], std::abs (*out));
             }
         }
 
+        if (numOutputs == 1)
+            peaks[1] = peaks[0];
+        for (size_t ch = 0; ch < 2; ++ch)
+            if (peaks[ch] > outputPeaks[ch].load (std::memory_order_relaxed))
+                outputPeaks[ch].store (peaks[ch], std::memory_order_relaxed);
+
         offset += n;
     }
+}
+
+void PluginProcessor::publishChord (const chordify::Voices& voices, int root)
+{
+    std::array<std::uint64_t, 2> words {};
+    for (const auto& voice : voices)
+    {
+        if (! voice.gated)
+            continue;
+        const auto note = std::clamp (juce::roundToInt (voice.note), 0, 127);
+        words[(size_t) note / 64] |= std::uint64_t { 1 } << (note % 64);
+    }
+
+    const auto anyHeld = words[0] != 0 || words[1] != 0;
+    for (size_t i = 0; i < words.size(); ++i)
+        chordNotes[i].store (words[i], std::memory_order_relaxed);
+    chordRoot.store (anyHeld ? root : -1, std::memory_order_relaxed);
+}
+
+std::bitset<128> PluginProcessor::getChordNotes() const
+{
+    std::bitset<128> notes;
+    for (size_t word = 0; word < chordNotes.size(); ++word)
+    {
+        const auto bits = chordNotes[word].load (std::memory_order_relaxed);
+        for (size_t i = 0; i < 64; ++i)
+            notes[word * 64 + i] = ((bits >> i) & 1) != 0;
+    }
+    return notes;
+}
+
+std::array<float, 2> PluginProcessor::takeOutputPeaks()
+{
+    return { outputPeaks[0].exchange (0.0f, std::memory_order_relaxed), outputPeaks[1].exchange (0.0f, std::memory_order_relaxed) };
 }
 
 void PluginProcessor::updateHeldNotes (const juce::MidiBuffer& midi)
