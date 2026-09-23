@@ -2,8 +2,8 @@ name: Linux CI Image
 
 on:
   workflow_dispatch:
-  push:
-    paths: ['.github/docker/linux-ci.Dockerfile']
+  # push: # CI disabled for now
+  #   paths: ['.github/docker/linux-ci.Dockerfile']
 
 jobs:
   build:
