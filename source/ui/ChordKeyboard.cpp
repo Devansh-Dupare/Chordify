@@ -1,4 +1,5 @@
 #include "ChordKeyboard.h"
+#include "Pt1LookAndFeel.h"
 
 namespace ui
 {
@@ -11,10 +12,112 @@ namespace ui
         constexpr float blackHeightRatio = 0.62f;
         constexpr int maxWindowStart = 12 * ((128 - ChordKeyboard::numKeys) / 12);
 
-        const juce::Colour whiteKey { 0xffd9dce2 };
-        const juce::Colour blackKey { 0xff262a33 };
+        // Key depth: how much of each key's front face shows (it shrinks as the key goes down)
+        constexpr float whiteLip = 7.0f, blackLip = 6.0f, selectedLip = 3.0f, pressedLip = 1.5f;
+        constexpr float keyPad = 10.0f; // room around each cached key image for its shadow and glow
 
-        const juce::String defaultHint = "Click keys to pick up to 8 notes. Click an empty slot to save the chord there; right-click a slot to replace or clear it.";
+        juce::Path keyShape (juce::Rectangle<float> key, float corner)
+        {
+            juce::Path p;
+            p.addRoundedRectangle (key.getX(), key.getY(), key.getWidth(), key.getHeight(), corner, corner, false, false, true, true);
+            return p;
+        }
+
+        float lipFor (bool black, bool isSelected, bool isPressed)
+        {
+            return isPressed ? pressedLip : (isSelected ? selectedLip : (black ? blackLip : whiteLip));
+        }
+
+        void paintWhiteKey (juce::Graphics& g, juce::Rectangle<float> key, bool isSelected, bool isHover, bool isPressed)
+        {
+            using namespace pt1;
+            const auto lip = lipFor (false, isSelected, isPressed);
+            const auto down = isSelected || isPressed;
+
+            // Contact shadow on the keybed, shorter when the key is down
+            juce::DropShadow (light::shadow.withAlpha (down ? 0.18f : 0.3f), 4, { 1, down ? 1 : 2 }).drawForPath (g, keyShape (key, 3.0f));
+
+            // Front lip: the key's front face, visible below the top surface
+            g.setGradientFill (juce::ColourGradient::vertical (colours::ivoryLip, key.getBottom() - lip, colours::ivoryLip.darker (0.15f), key.getBottom()));
+            g.fillPath (keyShape (key, 3.0f));
+
+            // Top face: bright along the top edge, falling off towards the front; inverted and a
+            // touch brighter when pushed in, so a down key doesn't just look dull
+            const auto face = key.withTrimmedBottom (lip);
+            auto top = colours::ivoryTop, bottom = colours::ivoryBottom;
+            if (down)
+                std::swap (top, bottom);
+            g.setGradientFill (juce::ColourGradient::vertical (top.brighter (down ? 0.03f : 0.0f), face.getY(), bottom, face.getBottom()));
+            g.fillPath (keyShape (face, 2.0f));
+
+            if (isHover)
+            {
+                g.setColour (juce::Colours::white.withAlpha (0.35f));
+                g.fillPath (keyShape (face, 2.0f));
+            }
+
+            if (isSelected)
+            {
+                // Colour wash, plus an inner glow line and a marker dot, so selection reads by shape too
+                g.setGradientFill (juce::ColourGradient::vertical (colours::accent.withAlpha (0.28f), face.getY(), colours::accent.withAlpha (0.6f), face.getBottom()));
+                g.fillPath (keyShape (face, 2.0f));
+                g.setColour (colours::accent.withAlpha (0.9f));
+                g.strokePath (keyShape (face.reduced (1.0f), 2.0f), juce::PathStrokeType (1.5f));
+                const auto dot = face.getWidth() * 0.22f;
+                g.setColour (colours::accentDark);
+                g.fillEllipse (juce::Rectangle<float> (dot, dot).withCentre ({ face.getCentreX(), face.getBottom() - 24.0f }));
+            }
+
+            // Side walls: narrow darker strips imply the key's thickness
+            g.setGradientFill (juce::ColourGradient::horizontal (juce::Colours::black.withAlpha (0.12f), face.getX(), juce::Colours::transparentBlack, face.getX() + 2.5f));
+            g.fillRect (face.withWidth (2.5f));
+            g.setGradientFill (juce::ColourGradient::horizontal (juce::Colours::transparentBlack, face.getRight() - 2.5f, juce::Colours::black.withAlpha (0.16f), face.getRight()));
+            g.fillRect (face.withTrimmedLeft (face.getWidth() - 2.5f));
+
+            // Edge between the top face and the front lip
+            g.setColour (juce::Colours::black.withAlpha (0.12f));
+            g.fillRect (key.getX() + 1.0f, face.getBottom() - 0.5f, key.getWidth() - 2.0f, 1.0f);
+        }
+
+        void paintBlackKey (juce::Graphics& g, juce::Rectangle<float> key, bool isSelected, bool isHover, bool isPressed)
+        {
+            using namespace pt1;
+            const auto lip = lipFor (true, isSelected, isPressed);
+            const auto down = isSelected || isPressed;
+            const auto shape = keyShape (key, 2.5f);
+
+            // Black keys sit above the whites and cast a stronger shadow onto them; a selected key
+            // also glows onto its neighbours
+            if (isSelected)
+                juce::DropShadow (colours::accent.withAlpha (0.55f), 7, {}).drawForPath (g, shape);
+            juce::DropShadow (light::shadow.withAlpha (down ? 0.35f : 0.5f), down ? 4 : 6, { 2, down ? 2 : 4 }).drawForPath (g, shape);
+
+            const auto bodyTop = isSelected ? colours::accent : colours::ebonyTop;
+            const auto bodyBottom = isSelected ? colours::accentDark : colours::ebonyBottom;
+
+            // Lip and sloped sides
+            g.setColour (isSelected ? colours::accentDark.darker (0.3f) : colours::ebonyLip);
+            g.fillPath (shape);
+
+            // Top face, inset so the sloped sides show
+            const auto face = key.withTrimmedBottom (lip).reduced (1.5f, 0.0f).withTrimmedTop (0.5f);
+            g.setGradientFill (juce::ColourGradient::vertical (down ? bodyBottom : bodyTop.brighter (isHover ? 0.25f : 0.0f), face.getY(),
+                down ? bodyTop : bodyBottom.brighter (isHover ? 0.2f : 0.0f), face.getBottom()));
+            g.fillPath (keyShape (face, 2.0f));
+
+            // Glossy highlight strip on the side facing the light
+            const auto gloss = face.withWidth (face.getWidth() * 0.35f).translated (face.getWidth() * 0.12f, 0.0f).withTrimmedBottom (face.getHeight() * 0.35f).reduced (0.0f, 2.0f);
+            g.setGradientFill (juce::ColourGradient::vertical (juce::Colours::white.withAlpha (isSelected ? 0.3f : 0.18f), gloss.getY(),
+                juce::Colours::transparentWhite, gloss.getBottom()));
+            g.fillRoundedRectangle (gloss, gloss.getWidth() / 2.0f);
+
+            if (isSelected)
+            {
+                const auto dot = face.getWidth() * 0.3f;
+                g.setColour (colours::caseTop);
+                g.fillEllipse (juce::Rectangle<float> (dot, dot).withCentre ({ face.getCentreX(), face.getBottom() - 30.0f })); // above the note label
+            }
+        }
 
         juce::RangedAudioParameter& slotParameter (juce::AudioProcessorValueTreeState& tree)
         {
@@ -157,7 +260,9 @@ namespace ui
             // The first key decides whether this drag adds or removes notes
             dragAdds = ! shown[(size_t) *note];
             lastDraggedNote = *note;
+            pressedNote = *note;
             setNote (*note, dragAdds);
+            repaint();
         }
     }
 
@@ -166,12 +271,96 @@ namespace ui
         if (const auto note = noteAt (event.position); note && *note != lastDraggedNote)
         {
             lastDraggedNote = *note;
+            pressedNote = *note;
             setNote (*note, dragAdds);
+            repaint();
         }
+    }
+
+    void ChordKeyboard::mouseUp (const juce::MouseEvent& event)
+    {
+        pressedNote = -1;
+        setHovered (noteAt (event.position).value_or (-1));
+        repaint();
+    }
+
+    void ChordKeyboard::mouseMove (const juce::MouseEvent& event)
+    {
+        setHovered (noteAt (event.position).value_or (-1));
+    }
+
+    void ChordKeyboard::mouseExit (const juce::MouseEvent&)
+    {
+        setHovered (-1);
+    }
+
+    void ChordKeyboard::setHovered (int note)
+    {
+        if (note != hoveredNote)
+        {
+            hoveredNote = note;
+            repaint();
+        }
+    }
+
+    void ChordKeyboard::resized()
+    {
+        art = {}; // key sizes changed
+    }
+
+    ChordKeyboard::KeyState ChordKeyboard::stateOf (int note) const
+    {
+        if (note == pressedNote)
+            return pressed;
+        const auto isSelected = shown[(size_t) note];
+        const auto isHover = note == hoveredNote;
+        return isSelected ? (isHover ? selectedHover : selected) : (isHover ? hover : idle);
+    }
+
+    const ChordKeyboard::KeyArt& ChordKeyboard::keyArt (float scale)
+    {
+        const auto whiteBounds = keyBounds (windowStart);
+        const auto blackBounds = keyBounds (windowStart + 1);
+        const auto whiteSize = juce::Point<float> (whiteBounds.getWidth(), whiteBounds.getHeight());
+        const auto blackSize = juce::Point<float> (blackBounds.getWidth(), blackBounds.getHeight());
+
+        if (juce::approximatelyEqual (art.scale, scale) && art.whiteSize == whiteSize && art.blackSize == blackSize)
+            return art;
+
+        art.scale = scale;
+        art.whiteSize = whiteSize;
+        art.blackSize = blackSize;
+
+        for (int state = 0; state < numKeyStates; ++state)
+        {
+            const auto isSelected = state == selected || state == selectedHover;
+            const auto isHover = state == hover || state == selectedHover;
+            const auto isPressed = state == pressed;
+
+            // Images cover the key's full slot plus padding; white keys sit 1 px in from each side,
+            // leaving a hairline of keybed between neighbours
+            const auto white = juce::Rectangle<float> (whiteSize.x, whiteSize.y);
+            art.white[(size_t) state] = pt1::renderCached (white.expanded (keyPad), scale, [&] (juce::Graphics& g) {
+                paintWhiteKey (g, white.reduced (1.0f, 0.0f), isSelected, isHover, isPressed);
+            });
+
+            const auto black = juce::Rectangle<float> (blackSize.x, blackSize.y);
+            art.black[(size_t) state] = pt1::renderCached (black.expanded (keyPad), scale, [&] (juce::Graphics& g) {
+                paintBlackKey (g, black, isSelected, isHover, isPressed);
+            });
+        }
+        return art;
     }
 
     void ChordKeyboard::paint (juce::Graphics& g)
     {
+        const auto bounds = getLocalBounds().toFloat();
+        const auto& images = keyArt (pt1::physicalScale (g));
+
+        // Keybed: the dark slot the keys sit in
+        g.setColour (pt1::colours::keybed);
+        g.fillRoundedRectangle (bounds, 3.0f);
+
         for (auto black : { false, true })
         {
             for (int note = windowStart; note < windowStart + numKeys; ++note)
@@ -179,27 +368,27 @@ namespace ui
                 if (isBlack (note) != black)
                     continue;
 
-                const auto key = keyBounds (note).reduced (black ? 0.0f : 1.0f, 0.0f);
+                const auto& image = (black ? images.black : images.white)[(size_t) stateOf (note)];
+                const auto key = keyBounds (note);
+                g.drawImage (image, key.expanded (keyPad));
+
+                // Label C keys, and every selected key so the chord can be read off the keyboard
                 const auto on = shown[(size_t) note];
-                g.setColour (on ? colours::accent : (black ? blackKey : whiteKey));
-                g.fillRoundedRectangle (key.withTrimmedTop (-4.0f), 3.0f); // rounded bottom corners only
-
-                if (black)
-                {
-                    g.setColour (colours::background);
-                    g.drawRoundedRectangle (key.withTrimmedTop (-4.0f), 3.0f, 1.0f);
-                }
-
                 if (on || note % 12 == 0)
                 {
-                    // Label C keys, and every selected key so the chord can be read off the keyboard
-                    const auto labelArea = key.withTop (key.getBottom() - 16.0f);
-                    g.setColour (on ? colours::background : colours::textDim);
-                    g.setFont (juce::FontOptions (black ? 8.5f : 10.0f, on ? juce::Font::bold : juce::Font::plain));
+                    const auto lip = lipFor (black, on, note == pressedNote);
+                    const auto labelArea = key.withTrimmedBottom (lip).withTop (key.getBottom() - lip - (black ? 22.0f : 16.0f));
+                    g.setColour (on ? (black ? pt1::colours::caseTop : pt1::colours::accentDark) : pt1::colours::inkDim);
+                    g.setFont (pt1::textFont (black ? 8.5f : 10.0f, on));
                     g.drawText (juce::MidiMessage::getMidiNoteName (note, true, ! black, 3), labelArea, juce::Justification::centred, false);
                 }
             }
         }
+
+        // The case overhangs the back of the keys and shades them
+        g.setGradientFill (juce::ColourGradient::vertical (juce::Colours::black.withAlpha (0.35f), bounds.getY(),
+            juce::Colours::transparentBlack, bounds.getY() + 10.0f));
+        g.fillRect (bounds.withHeight (10.0f));
     }
 
     //==============================================================================
@@ -234,26 +423,30 @@ namespace ui
 
         void paintButton (juce::Graphics& g, bool highlighted, bool down) override
         {
-            auto bounds = getLocalBounds().toFloat().reduced (3.0f);
-            const auto fill = active ? colours::accent : (filled ? colours::panel.brighter (0.1f) : juce::Colours::transparentBlack);
-            g.setColour (fill.brighter (down ? 0.15f : (highlighted ? 0.07f : 0.0f)));
-            g.fillRoundedRectangle (bounds, 6.0f);
+            using namespace pt1;
 
-            if (! active)
-            {
-                g.setColour (filled ? colours::outline : colours::textDim.withAlpha (highlighted ? 0.7f : 0.4f));
-                g.drawRoundedRectangle (bounds.reduced (0.5f), 6.0f, 1.0f);
-            }
+            // A rubber button that stays pushed in while its slot plays
+            auto bounds = getLocalBounds().toFloat().reduced (4.0f, 5.0f);
+            drawRubberButton (g, bounds, down || active, highlighted);
+            bounds.translate (0.0f, down || active ? 1.0f : 0.0f);
 
-            bounds.reduce (8.0f, 4.0f);
-            const auto textColour = active ? colours::background : colours::text;
-            g.setColour (textColour);
-            g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+            // LED: lit when this slot is playing (the pushed-in shape carries the state too)
+            const auto led = juce::Rectangle<float> (7.0f, 7.0f).withCentre ({ bounds.getRight() - 11.0f, bounds.getY() + 11.0f });
+            if (active)
+                juce::DropShadow (colours::accent.withAlpha (0.8f), 6, {}).drawForPath (g, [&] { juce::Path p; p.addEllipse (led); return p; }());
+            g.setColour (active ? colours::accent : colours::bezel.withAlpha (filled ? 0.55f : 0.25f));
+            g.fillEllipse (led);
+            g.setColour (juce::Colours::white.withAlpha (active ? 0.6f : 0.2f));
+            g.fillEllipse (led.reduced (2.0f).translated (-0.7f, -0.7f));
+
+            bounds.reduce (10.0f, 5.0f);
+            g.setColour (colours::ink);
+            g.setFont (printFont (13.0f));
             g.drawText (juce::String (index + 1), bounds.removeFromTop (bounds.getHeight() * 0.5f), juce::Justification::bottomLeft, false);
 
-            g.setColour (filled ? textColour.withAlpha (0.85f) : colours::textDim);
-            g.setFont (juce::FontOptions (10.5f));
-            g.drawFittedText (filled ? notes : juce::String ("Empty"), bounds.toNearestInt(), juce::Justification::topLeft, 1, 0.8f);
+            g.setColour (filled ? colours::ink : colours::inkDim);
+            g.setFont (filled ? textFont (11.0f, true) : printFont (9.5f));
+            g.drawFittedText (filled ? notes : juce::String ("EMPTY"), bounds.toNearestInt(), juce::Justification::centredLeft, 1, 0.75f);
         }
 
     private:
@@ -347,87 +540,5 @@ namespace ui
         const auto width = (float) getWidth() / (float) buttons.size();
         for (int i = 0; i < buttons.size(); ++i)
             buttons[i]->setBounds (juce::Rectangle<float> ((float) i * width, 0.0f, width, (float) getHeight()).toNearestInt());
-    }
-
-    //==============================================================================
-    ChordPanel::ChordPanel (juce::AudioProcessorValueTreeState& tree, ChordSlots& chordSlots)
-        : keyboard (tree, chordSlots), slotButtons (tree, chordSlots)
-    {
-        octaveCaption.setText ("Octave", juce::dontSendNotification);
-        octaveCaption.setColour (juce::Label::textColourId, colours::textDim);
-        octaveCaption.setFont (juce::FontOptions (12.5f));
-        octaveRange.setJustificationType (juce::Justification::centred);
-        octaveRange.setFont (juce::FontOptions (12.0f));
-        hint.setColour (juce::Label::textColourId, colours::textDim);
-        hint.setFont (juce::FontOptions (12.0f));
-        hint.setText (defaultHint, juce::dontSendNotification);
-
-        octaveDown.setTooltip ("Scroll the keyboard down an octave");
-        octaveUp.setTooltip ("Scroll the keyboard up an octave");
-        clear.setTooltip ("Remove every note from the keyboard");
-        octaveDown.onClick = [this] { keyboard.shiftOctave (-1); };
-        octaveUp.onClick = [this] { keyboard.shiftOctave (1); };
-        clear.onClick = [this] { keyboard.clearNotes(); };
-
-        keyboard.onWindowChanged = [this] { updateRange(); };
-        keyboard.onNoteLimit = [this] { flashHint ("A chord can have up to 8 notes. Remove one to add another."); };
-        slotButtons.onNothingToSave = [this] { flashHint ("Pick some notes on the keyboard first, then click an empty slot to save them."); };
-        updateRange();
-
-        for (auto* child : std::initializer_list<juce::Component*> { &keyboard, &slotButtons, &octaveCaption, &octaveRange, &hint, &octaveDown, &octaveUp, &clear })
-            addAndMakeVisible (child);
-    }
-
-    void ChordPanel::refresh()
-    {
-        keyboard.refresh();
-        slotButtons.refresh();
-    }
-
-    void ChordPanel::flashHint (const juce::String& message)
-    {
-        hint.setText (message, juce::dontSendNotification);
-        hint.setColour (juce::Label::textColourId, colours::warm);
-        startTimer (3000);
-    }
-
-    void ChordPanel::timerCallback()
-    {
-        stopTimer();
-        hint.setText (defaultHint, juce::dontSendNotification);
-        hint.setColour (juce::Label::textColourId, colours::textDim);
-    }
-
-    void ChordPanel::updateRange()
-    {
-        const auto low = keyboard.getLowestNote();
-        octaveRange.setText (juce::MidiMessage::getMidiNoteName (low, true, true, 3) + juce::String::fromUTF8 (" \xe2\x80\x93 ")
-                                 + juce::MidiMessage::getMidiNoteName (low + ChordKeyboard::numKeys - 1, true, true, 3),
-            juce::dontSendNotification);
-    }
-
-    void ChordPanel::resized()
-    {
-        constexpr int controlsWidth = 124;
-        constexpr int gap = 12;
-
-        auto area = getLocalBounds();
-        auto slotsRow = area.removeFromBottom (48);
-        slotButtons.setBounds (slotsRow);
-        area.removeFromBottom (4);
-        hint.setBounds (area.removeFromBottom (20));
-        area.removeFromBottom (6);
-
-        auto controls = area.removeFromLeft (controlsWidth);
-        area.removeFromLeft (gap);
-        keyboard.setBounds (area);
-
-        octaveCaption.setBounds (controls.removeFromTop (18));
-        auto row = controls.removeFromTop (28);
-        octaveDown.setBounds (row.removeFromLeft (28));
-        octaveUp.setBounds (row.removeFromRight (28));
-        octaveRange.setBounds (row);
-        controls.removeFromTop (10);
-        clear.setBounds (controls.removeFromTop (28));
     }
 }

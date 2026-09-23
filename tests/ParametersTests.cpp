@@ -1,5 +1,6 @@
 #include "helpers/dsp_test_helpers.h"
 #include "helpers/test_helpers.h"
+#include <PluginEditor.h>
 #include <PluginProcessor.h>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -284,4 +285,22 @@ TEST_CASE ("Chord Slot picks what plays", "[chord]")
         renderThroughPlugin (plugin, std::vector<float> (1024, 0.0f));
         CHECK (plugin.getChordNotes().none());
     }
+}
+
+TEST_CASE ("Editor scales without distorting", "[editor]")
+{
+    runWithinPluginEditor ([] (PluginProcessor& plugin) {
+        auto* editor = plugin.getActiveEditor();
+        REQUIRE (editor != nullptr);
+        CHECK (editor->getWidth() == PluginEditor::baseWidth);
+        CHECK (editor->isResizable());
+
+        // Resizing keeps the aspect ratio and scales the whole layout uniformly
+        editor->setSize (1500, 840);
+        auto* body = editor->getChildComponent (0);
+        REQUIRE (body != nullptr);
+        CHECK (body->getWidth() == PluginEditor::baseWidth);
+        CHECK (body->getTransform().mat00 == Catch::Approx (1.5f));
+        CHECK (body->getTransform().mat11 == Catch::Approx (1.5f));
+    });
 }

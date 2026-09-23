@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../state/ChordSlots.h"
-#include "Theme.h"
+#include "Pt1Style.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 
 namespace ui
@@ -38,13 +38,39 @@ namespace ui
         std::function<void()> onNoteLimit;     // tried to add a note to a full chord
 
         void paint (juce::Graphics&) override;
+        void resized() override;
         void mouseDown (const juce::MouseEvent&) override;
         void mouseDrag (const juce::MouseEvent&) override;
+        void mouseUp (const juce::MouseEvent&) override;
+        void mouseMove (const juce::MouseEvent&) override;
+        void mouseExit (const juce::MouseEvent&) override;
 
     private:
+        // Pre-rendered key layers, one image per key colour and state, so a repaint only blits
+        // images. Rebuilt when the key size or display scale changes.
+        enum KeyState
+        {
+            idle,
+            hover,
+            selected,
+            selectedHover,
+            pressed,
+            numKeyStates
+        };
+
+        struct KeyArt
+        {
+            float scale = 0.0f;
+            juce::Point<float> whiteSize, blackSize;
+            std::array<juce::Image, numKeyStates> white, black;
+        };
+
         void update();
         bool setNote (int note, bool on);
+        void setHovered (int note);
         juce::Rectangle<float> keyBounds (int note) const;
+        KeyState stateOf (int note) const;
+        const KeyArt& keyArt (float scale);
         static bool isBlack (int note);
 
         juce::RangedAudioParameter& slotParam;
@@ -57,6 +83,9 @@ namespace ui
 
         bool dragAdds = true;
         int lastDraggedNote = -1;
+        int hoveredNote = -1;
+        int pressedNote = -1;
+        KeyArt art;
     };
 
     // The saved chord slots. Click an empty slot to save the chord on the keyboard into it, click a
@@ -88,28 +117,5 @@ namespace ui
         juce::OwnedArray<SlotButton> buttons;
         juce::ParameterAttachment attachment;
         int activeSlot = params::pianoSlot;
-    };
-
-    // Everything for picking chords: keyboard, octave scroll, clear, a hint line and the slots
-    class ChordPanel : public juce::Component, private juce::Timer
-    {
-    public:
-        ChordPanel (juce::AudioProcessorValueTreeState&, ChordSlots&);
-
-        void refresh(); // from the editor timer
-        void resized() override;
-
-        ChordKeyboard& getKeyboard() { return keyboard; }
-        ChordSlotButtons& getSlotButtons() { return slotButtons; }
-
-    private:
-        void timerCallback() override;
-        void updateRange();
-        void flashHint (const juce::String& message);
-
-        ChordKeyboard keyboard;
-        ChordSlotButtons slotButtons;
-        juce::Label octaveCaption, octaveRange, hint;
-        juce::TextButton octaveDown { juce::String::fromUTF8 ("\xe2\x88\x92") }, octaveUp { "+" }, clear { "Clear notes" };
     };
 }
