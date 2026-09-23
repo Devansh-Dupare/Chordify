@@ -18,6 +18,21 @@ PluginProcessor::~PluginProcessor()
 {
 }
 
+PluginProcessor::ParameterValues::ParameterValues (juce::AudioProcessorValueTreeState& tree)
+    : chordSource (*tree.getRawParameterValue (params::id::chordSource)),
+      root (*tree.getRawParameterValue (params::id::root)),
+      chordType (*tree.getRawParameterValue (params::id::chordType)),
+      harmonics (*tree.getRawParameterValue (params::id::harmonics)),
+      detune (*tree.getRawParameterValue (params::id::detune)),
+      spread (*tree.getRawParameterValue (params::id::spread)),
+      glide (*tree.getRawParameterValue (params::id::glide)),
+      decay (*tree.getRawParameterValue (params::id::decay)),
+      brightness (*tree.getRawParameterValue (params::id::brightness)),
+      timbre (*tree.getRawParameterValue (params::id::timbre)),
+      mix (*tree.getRawParameterValue (params::id::mix))
+{
+}
+
 //==============================================================================
 const juce::String PluginProcessor::getName() const
 {
@@ -53,7 +68,8 @@ bool PluginProcessor::isMidiEffect() const
 
 double PluginProcessor::getTailLengthSeconds() const
 {
-    return 0.0;
+    // Resonators keep ringing for their decay time after the input stops
+    return parameterValues.decay.load();
 }
 
 int PluginProcessor::getNumPrograms()
@@ -87,10 +103,25 @@ void PluginProcessor::changeProgramName (int index, const juce::String& newName)
 //==============================================================================
 void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    juce::ignoreUnused (sampleRate, samplesPerBlock);
+    currentSampleRate = sampleRate;
 
     for (auto& word : heldNotes)
         word.store (0, std::memory_order_relaxed);
+
+    resonatorBank.prepare (sampleRate);
+    setLatencySamples (engine->getLatencySamples());
+
+    midiVoices.reset();
+    internalVoices = {};
+    lastPartialInputs.reset();
+
+    // Hosts may send larger blocks than announced; renderSegment splits those into pieces this size
+    const auto blockSize = std::max (samplesPerBlock, 32);
+    monoInput.setSize (1, blockSize);
+    wetOutput.setSize (2, blockSize);
+
+    mixSmoothed.reset (sampleRate, 0.02);
+    mixSmoothed.setCurrentAndTargetValue (parameterValues.mix.load() / 100.0f);
 }
 
 void PluginProcessor::releaseResources()
@@ -134,7 +165,106 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     updateHeldNotes (midiMessages);
 
-    // Phase 2: audio passes through untouched. The resonator bank arrives in Phase 3.
+    // Render up to each MIDI event, then apply it, so chord changes are sample accurate
+    const auto numSamples = buffer.getNumSamples();
+    int position = 0;
+    for (const auto metadata : midiMessages)
+    {
+        const auto eventPosition = std::clamp (metadata.samplePosition, position, numSamples);
+        renderSegment (buffer, position, eventPosition - position);
+        handleMidiEvent (metadata.getMessage());
+        position = eventPosition;
+    }
+    renderSegment (buffer, position, numSamples - position);
+}
+
+void PluginProcessor::handleMidiEvent (const juce::MidiMessage& message)
+{
+    // Tracked in both chord source modes, so switching to MIDI picks up notes already held
+    if (message.isNoteOn())
+        midiVoices.noteOn (message.getNoteNumber());
+    else if (message.isNoteOff())
+        midiVoices.noteOff (message.getNoteNumber());
+    else if (message.isAllNotesOff() || message.isAllSoundOff())
+        midiVoices.allNotesOff();
+    else if (message.isPitchWheel())
+        midiVoices.setPitchBend ((float) (message.getPitchWheelValue() - 8192) / 8192.0f);
+}
+
+void PluginProcessor::updateEngine()
+{
+    const auto& p = parameterValues;
+
+    PartialInputs inputs;
+    if ((params::ChordSource) juce::roundToInt (p.chordSource.load()) == params::ChordSource::midi)
+    {
+        inputs.voices = midiVoices.getVoices();
+    }
+    else
+    {
+        internalVoices = chordify::internalChord (juce::roundToInt (p.root.load()), juce::roundToInt (p.chordType.load()), internalVoices);
+        inputs.voices = internalVoices;
+    }
+
+    inputs.settings.numHarmonics = juce::roundToInt (p.harmonics.load());
+    inputs.settings.brightness = p.brightness.load() / 100.0f;
+    inputs.settings.oddOnly = juce::roundToInt (p.timbre.load()) == 1;
+    inputs.settings.detuneCents = p.detune.load();
+    inputs.settings.spread = p.spread.load() / 100.0f;
+    inputs.settings.sampleRate = currentSampleRate;
+
+    if (inputs != lastPartialInputs)
+    {
+        engine->setPartials (chordify::computePartials (inputs.voices, inputs.settings));
+        lastPartialInputs = inputs;
+    }
+
+    engine->setDecay (p.decay.load());
+    engine->setGlide (p.glide.load() / 1000.0f);
+    mixSmoothed.setTargetValue (p.mix.load() / 100.0f);
+}
+
+void PluginProcessor::renderSegment (juce::AudioBuffer<float>& buffer, int start, int numSamples)
+{
+    if (numSamples <= 0)
+        return;
+
+    updateEngine();
+
+    const auto numInputs = std::min (getTotalNumInputChannels(), buffer.getNumChannels());
+    const auto numOutputs = std::min (getTotalNumOutputChannels(), buffer.getNumChannels());
+    auto* mono = monoInput.getWritePointer (0);
+    auto* wetLeft = wetOutput.getWritePointer (0);
+    auto* wetRight = wetOutput.getWritePointer (1);
+
+    for (int offset = 0; offset < numSamples;)
+    {
+        const auto n = std::min (numSamples - offset, monoInput.getNumSamples());
+        const auto first = start + offset;
+
+        // The resonators are excited by the mono sum of the input
+        monoInput.clear (0, 0, n);
+        for (int ch = 0; ch < numInputs; ++ch)
+            juce::FloatVectorOperations::addWithMultiply (mono, buffer.getReadPointer (ch, first), 1.0f / (float) numInputs, n);
+
+        engine->process (mono, wetLeft, wetRight, n);
+
+        if (numOutputs == 1)
+            juce::FloatVectorOperations::add (wetLeft, wetRight, n); // fold the stereo wet signal to mono
+
+        for (int i = 0; i < n; ++i)
+        {
+            const auto wetAmount = mixSmoothed.getNextValue();
+            for (int ch = 0; ch < numOutputs; ++ch)
+            {
+                auto* out = buffer.getWritePointer (ch, first + i);
+                const auto wet = ch == 1 ? wetRight[i] : (numOutputs == 1 ? 0.5f * wetLeft[i] : wetLeft[i]);
+                *out = *out * (1.0f - wetAmount) + wet * wetAmount;
+            }
+        }
+
+        offset += n;
+    }
 }
 
 void PluginProcessor::updateHeldNotes (const juce::MidiBuffer& midi)

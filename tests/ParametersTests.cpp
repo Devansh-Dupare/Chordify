@@ -24,13 +24,13 @@ TEST_CASE ("Parameter layout", "[params]")
     SECTION ("every parameter is exposed to the host")
     {
         for (auto* paramId : { params::id::engine, params::id::chordSource, params::id::root, params::id::chordType,
-                 params::id::harmonics, params::id::detune, params::id::spread, params::id::decay, params::id::intensity,
-                 params::id::mix, params::id::inputHpf, params::id::tone })
+                 params::id::harmonics, params::id::detune, params::id::spread, params::id::glide, params::id::decay,
+                 params::id::brightness, params::id::timbre, params::id::mix, params::id::inputHpf, params::id::tone })
         {
             INFO (paramId);
             CHECK (plugin.getParameterTree().getParameter (paramId) != nullptr);
         }
-        CHECK (plugin.getParameters().size() == 12);
+        CHECK (plugin.getParameters().size() == 14);
     }
 
     SECTION ("defaults")
@@ -79,7 +79,7 @@ TEST_CASE ("State save and restore", "[params]")
     }
 }
 
-TEST_CASE ("MIDI input and passthrough", "[midi]")
+TEST_CASE ("MIDI input", "[midi]")
 {
     PluginProcessor plugin;
     CHECK (plugin.acceptsMidi());
@@ -94,7 +94,6 @@ TEST_CASE ("MIDI input and passthrough", "[midi]")
     for (int ch = 0; ch < 2; ++ch)
         for (int i = 0; i < blockSize; ++i)
             buffer.setSample (ch, i, random.nextFloat() - 0.5f);
-    const juce::AudioBuffer<float> input (buffer);
 
     juce::MidiBuffer midi;
     midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
@@ -125,13 +124,6 @@ TEST_CASE ("MIDI input and passthrough", "[midi]")
         CHECK (plugin.getHeldNotes().none());
     }
 
-    SECTION ("audio passes through unchanged")
-    {
-        for (int ch = 0; ch < 2; ++ch)
-            for (int i = 0; i < blockSize; ++i)
-                CHECK (juce::exactlyEqual (buffer.getSample (ch, i), input.getSample (ch, i)));
-    }
-
     plugin.releaseResources();
 }
 
@@ -143,4 +135,36 @@ TEST_CASE ("Editor opens with every control attached", "[editor]")
         CHECK (editor->getWidth() > 0);
         CHECK (editor->getHeight() > 0);
     });
+}
+
+TEST_CASE ("Mix at 0% passes the input through unchanged", "[mix]")
+{
+    PluginProcessor plugin;
+    setValue (plugin, params::id::mix, 0.0f);
+
+    constexpr int blockSize = 256;
+    plugin.setPlayConfigDetails (2, 2, 48000.0, blockSize);
+    plugin.prepareToPlay (48000.0, blockSize);
+
+    juce::AudioBuffer<float> buffer (2, blockSize);
+    juce::Random random (3);
+    for (int ch = 0; ch < 2; ++ch)
+        for (int i = 0; i < blockSize; ++i)
+            buffer.setSample (ch, i, random.nextFloat() - 0.5f);
+    const juce::AudioBuffer<float> input (buffer);
+
+    juce::MidiBuffer midi;
+    plugin.processBlock (buffer, midi);
+
+    for (int ch = 0; ch < 2; ++ch)
+        for (int i = 0; i < blockSize; ++i)
+            CHECK (juce::exactlyEqual (buffer.getSample (ch, i), input.getSample (ch, i)));
+}
+
+TEST_CASE ("Processor reports zero latency and a decay-length tail", "[latency]")
+{
+    PluginProcessor plugin;
+    plugin.prepareToPlay (48000.0, 512);
+    CHECK (plugin.getLatencySamples() == 0);
+    CHECK (plugin.getTailLengthSeconds() == Catch::Approx (1.5));
 }

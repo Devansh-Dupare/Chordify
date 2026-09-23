@@ -1,6 +1,8 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include "dsp/ChordMapper.h"
+#include "dsp/ResonatorBank.h"
 #include "params/Parameters.h"
 #include <bitset>
 
@@ -47,8 +49,48 @@ public:
 
 private:
     void updateHeldNotes (const juce::MidiBuffer& midi);
+    void handleMidiEvent (const juce::MidiMessage& message);
+    void updateEngine();
+    void renderSegment (juce::AudioBuffer<float>& buffer, int start, int numSamples);
 
     juce::AudioProcessorValueTreeState parameters { *this, nullptr, "Chordify", params::createLayout() };
+
+    struct ParameterValues
+    {
+        explicit ParameterValues (juce::AudioProcessorValueTreeState&);
+        std::atomic<float>& chordSource;
+        std::atomic<float>& root;
+        std::atomic<float>& chordType;
+        std::atomic<float>& harmonics;
+        std::atomic<float>& detune;
+        std::atomic<float>& spread;
+        std::atomic<float>& glide;
+        std::atomic<float>& decay;
+        std::atomic<float>& brightness;
+        std::atomic<float>& timbre;
+        std::atomic<float>& mix;
+    };
+    ParameterValues parameterValues { parameters };
+
+    // The Spectral engine arrives in Phase 4; until then both modes use the resonator bank
+    chordify::ResonatorBank resonatorBank;
+    chordify::Engine* engine = &resonatorBank;
+
+    chordify::VoiceAllocator midiVoices;
+    chordify::Voices internalVoices {};
+
+    // Partials are only recomputed when the chord or voicing actually changes
+    struct PartialInputs
+    {
+        chordify::Voices voices;
+        chordify::PartialSettings settings;
+        bool operator== (const PartialInputs&) const = default;
+    };
+    std::optional<PartialInputs> lastPartialInputs;
+
+    double currentSampleRate = 48000.0;
+    juce::AudioBuffer<float> monoInput, wetOutput;
+    juce::SmoothedValue<float> mixSmoothed;
 
     // Written by the audio thread, read by the UI: bit n of word n / 64 is MIDI note n
     std::array<std::atomic<std::uint64_t>, 2> heldNotes {};

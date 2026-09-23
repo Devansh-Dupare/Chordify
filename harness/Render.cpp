@@ -6,6 +6,8 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <bit>
+
 namespace
 {
     constexpr auto usage = R"(Usage: Render [options]
@@ -229,7 +231,7 @@ namespace
         bool nonFinite = false;
         for (int ch = 0; ch < 2; ++ch)
             for (int i = 0; i < numSamples; ++i)
-                nonFinite |= ! std::isfinite (input.getSample (ch, i));
+                nonFinite |= (std::bit_cast<std::uint32_t> (input.getSample (ch, i)) & 0x7f800000u) == 0x7f800000u; // survives -ffast-math
 
         const auto audioSeconds = numSamples / sampleRate;
         const auto peak = input.getMagnitude (0, numSamples);

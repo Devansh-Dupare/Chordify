@@ -80,6 +80,7 @@ Use a Release build for meaningful CPU numbers.
 - `source/` - Plugin source code (PluginProcessor, PluginEditor)
 - `source/params/` - Parameter IDs and `AudioProcessorValueTreeState` layout. IDs and choice-list order are saved in sessions — never rename/reorder, only append
 - `tests/` - Catch2 test files
+- `source/dsp/` - JUCE-free DSP: `Resonator` (single TPT SVF, reference maths), `ResonatorBank` (the engine), `ChordMapper` (notes → partial grid, voice allocation), `Engine` (interface for Phase 4's spectral engine)
 - `harness/` - `Render` offline render CLI (see Render Harness)
 - `benchmarks/` - Catch2 benchmark files
 - `cmake/` - CMake modules (Tests.cmake, Benchmarks.cmake, Assets.cmake, etc.)
@@ -89,6 +90,13 @@ Use a Release build for meaningful CPU numbers.
 - `packaging/` - Installer resources and scripts
 
 ## Architecture
+
+**Resonator engine** (`source/dsp/`):
+- Each partial is a TPT state-variable band-pass (Simper), tuned so the magnitude peak is exactly at f with unity gain and the ring-down is exactly T60: `g = tan(πf/fs)`, `R = 0.001^(1/(T60·fs))`, `k = (1+g²)(1−R²)/(g(1+R²))`. There is no separate Q — Decay sets it.
+- `ChordMapper` fills a fixed `PartialGrid` of 8 voices × 16 harmonics (slot = voice·16 + harmonic). Slots keep their index while a voice holds a note, so the bank can glide them. Held partials within 10 cents are merged.
+- `ResonatorBank` updates control state every 32 samples (log-frequency glide, ≥ 5 ms; 5 ms amplitude/gate smoothing) and linearly interpolates coefficients across the interval. Active slots are packed into contiguous lanes for auto-vectorisation; silent released slots are switched off.
+- Wet gain = `makeupGain` (+32 dB, calibrated so pink noise in ≈ out at defaults) × `sqrt(T60)` decay compensation × `1/sqrt(Σ held amplitude²)`, then a soft limiter above −1 dBFS.
+- The processor renders between MIDI events (sample-accurate chord changes), excites the bank with the mono input sum, and recomputes partials only when their inputs change.
 
 **SharedCode Library**: The `SharedCode` INTERFACE library links plugin source code to both the main plugin target and the Tests target, avoiding ODR violations.
 
