@@ -71,6 +71,7 @@ The AU "Current program is -1" pluginval warning is benign (JUCE AU wrapper).
 ./cmake-build-debug/Render --input pink --notes 60,64,67 --out /tmp/chord.wav
 ./cmake-build-debug/Render --list                    # parameter IDs
 ./cmake-build-debug/Render --set decay=2.5 ...       # real-world parameter values
+./cmake-build-debug/Render --preset "Glass Pad" ...  # factory preset (index or name), --set overrides
 ```
 
 Use a Release build for meaningful CPU numbers.
@@ -97,7 +98,9 @@ Use a Release build for meaningful CPU numbers.
 - `ResonatorBank` updates control state every 32 samples (log-frequency glide, ≥ 5 ms; 5 ms amplitude/gate smoothing) and linearly interpolates coefficients across the interval. Active slots are packed into contiguous lanes for auto-vectorisation; silent released slots are switched off.
 - `Exciter` (Excite param, default 100%) crossfades the resonator input from the raw signal to pink noise following the input's level (1 ms attack, 30 ms release). Resonators only ring where the input has energy, so a **pitched input only excites the partials matching its own harmonics and the chord collapses to one note** — the noise excitation is what makes every chord tone ring. Don't remove it or lower its default without re-testing pitched input (`tests/ParametersTests.cpp` "[chord]").
 - Chord sources: Internal (root + chord type params), MIDI (one chord tone per held key), MIDI Root (last held key is the root, chord type builds on it).
-- Wet gain = `makeupGain` (+27 dB, calibrated so pink noise in ≈ out at defaults, Excite 100%) × `sqrt(T60)` decay compensation × `1/sqrt(Σ held amplitude²)`, then a soft limiter above −1 dBFS.
+- Wet gain = `makeupGain` (+25 dB: drums/voice/pads land within ~2 dB of their input level at defaults, pink noise ~3 dB under) × `sqrt(T60)` decay compensation × `1/sqrt(Σ held amplitude²)`, then a soft limiter above −1 dBFS.
+- Signal chain: mono input sum → `InputHighPass` → `Exciter` → `ResonatorBank` → `TiltEq` (Tone) → dry/wet Mix → Output gain. HPF and Tone affect only the wet path.
+- Factory presets live in `source/params/Presets.cpp` and are exposed as host programs; each resets unlisted parameters to defaults. UI code is in `source/ui/` (Theme = LookAndFeel + colours, Widgets). The editor must call `setLookAndFeel` *after* adding its children, or sliders keep default-styled value boxes.
 - The processor renders between MIDI events (sample-accurate chord changes), excites the bank with the mono input sum, and recomputes partials only when their inputs change.
 
 **SharedCode Library**: The `SharedCode` INTERFACE library links plugin source code to both the main plugin target and the Tests target, avoiding ODR violations.
