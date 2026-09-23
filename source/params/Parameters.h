@@ -44,6 +44,7 @@ namespace params
     inline const juce::StringArray chordSourceNames { "Internal", "MIDI", "MIDI Root" };
     inline const juce::StringArray timbreNames { "All Harmonics", "Odd Harmonics" };
     inline const juce::StringArray chordTypeNames { "Major", "Minor", "Diminished", "Augmented", "Sus2", "Sus4", "Major 7", "Minor 7", "Dominant 7", "Power" };
+    inline const juce::StringArray chordTypeShortNames { "Maj", "Min", "Dim", "Aug", "Sus2", "Sus4", "Maj7", "Min7", "7", "5" }; // UI buttons, same order
 
     juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 }

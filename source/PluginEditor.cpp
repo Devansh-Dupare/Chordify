@@ -8,6 +8,8 @@ namespace
     constexpr int displayHeight = 68;
     constexpr int sectionHeight = 150;
     constexpr int meterWidth = 210;
+    constexpr int keyboardWidth = 14 * 30; // two octaves of 30 px white keys
+    constexpr int chordTypeButtonsWidth = ui::ChordTypeButtons::columns * 56;
 
     juce::String noteName (int note)
     {
@@ -21,9 +23,9 @@ PluginEditor::PluginEditor (PluginProcessor& p)
       processorRef (p),
       engine (p.getParameterTree(), params::id::engine),
       chordSource (p.getParameterTree(), params::id::chordSource),
-      chordType (p.getParameterTree(), params::id::chordType),
       timbre (p.getParameterTree(), params::id::timbre),
-      root (p.getParameterTree(), params::id::root),
+      keyboard (p.getParameterTree(), [&p] { return ui::ChordKeyboard::SoundingChord { p.getChordNotes(), p.getChordRoot() }; }),
+      chordTypeButtons (p.getParameterTree()),
       harmonics (p.getParameterTree(), params::id::harmonics),
       brightness (p.getParameterTree(), params::id::brightness),
       detune (p.getParameterTree(), params::id::detune),
@@ -55,10 +57,11 @@ PluginEditor::PluginEditor (PluginProcessor& p)
     addAndMakeVisible (chordDisplay);
     addAndMakeVisible (meter);
 
-    chordChoices.add (chordSource);
-    chordChoices.add (chordType);
-    chordSection.addItem (chordChoices, ui::Choice::preferredWidth);
-    chordSection.addItem (root, ui::Knob::preferredWidth);
+    chordControls.add (chordSource);
+    chordControls.add (octaveButtons);
+    chordSection.addItem (chordControls, ui::Choice::preferredWidth);
+    chordSection.addItem (keyboard, keyboardWidth);
+    chordSection.addItem (chordTypeButtons, chordTypeButtonsWidth);
 
     voicingSection.addItem (timbre, ui::Choice::preferredWidth);
     for (auto* knob : { &harmonics, &brightness, &detune, &spread })
@@ -86,9 +89,10 @@ PluginEditor::PluginEditor (PluginProcessor& p)
     };
    #endif
 
-    const auto topRowWidth = chordSection.getMinimumWidth() + gap + voicingSection.getMinimumWidth();
-    setSize (2 * margin + topRowWidth,
-        2 * margin + headerHeight + gap + displayHeight + 2 * (gap + sectionHeight));
+    const auto contentWidth = std::max ({ chordSection.getMinimumWidth(), voicingSection.getMinimumWidth(),
+        resonanceSection.getMinimumWidth() + gap + outputSection.getMinimumWidth() });
+    setSize (2 * margin + contentWidth,
+        2 * margin + headerHeight + gap + displayHeight + 3 * (gap + sectionHeight));
 
     // Last, so the change propagates to every child added above (sliders rebuild their value boxes)
     setLookAndFeel (&lookAndFeel);
@@ -106,6 +110,7 @@ PluginEditor::~PluginEditor()
 void PluginEditor::timerCallback()
 {
     meter.update (processorRef.takeOutputPeaks());
+    keyboard.refresh();
     updateChordDisplay();
     syncPresetBox();
 }
@@ -124,8 +129,19 @@ void PluginEditor::updateChordDisplay()
 {
     auto& tree = processorRef.getParameterTree();
     const auto source = (params::ChordSource) juce::roundToInt (tree.getRawParameterValue (params::id::chordSource)->load());
-    const auto notes = processorRef.getChordNotes();
-    const auto rootNote = processorRef.getChordRoot();
+    const auto type = juce::roundToInt (tree.getRawParameterValue (params::id::chordType)->load());
+
+    // In Internal mode read the chord straight from the parameters, so the name is right even while
+    // no audio is being processed; the MIDI modes show what the processor is playing
+    auto notes = processorRef.getChordNotes();
+    auto rootNote = processorRef.getChordRoot();
+    if (source == params::ChordSource::internal)
+    {
+        rootNote = juce::roundToInt (tree.getRawParameterValue (params::id::root)->load());
+        notes.reset();
+        for (auto interval : chordify::chordIntervals (type))
+            notes[(size_t) std::min (rootNote + interval, 127)] = true;
+    }
 
     juce::StringArray noteNames;
     for (int note = 0; note < 128; ++note)
@@ -140,7 +156,6 @@ void PluginEditor::updateChordDisplay()
     }
     else if (rootNote >= 0)
     {
-        const auto type = juce::roundToInt (tree.getRawParameterValue (params::id::chordType)->load());
         name = noteName (rootNote) + " " + params::chordTypeNames[type];
         detail = noteNames.joinIntoString (juce::String::fromUTF8 ("  \xc2\xb7  "));
     }
@@ -200,10 +215,10 @@ void PluginEditor::resized()
     chordDisplay.setBounds (display);
 
     area.removeFromTop (gap);
-    auto topRow = area.removeFromTop (sectionHeight);
-    chordSection.setBounds (topRow.removeFromLeft (chordSection.getMinimumWidth()));
-    topRow.removeFromLeft (gap);
-    voicingSection.setBounds (topRow);
+    chordSection.setBounds (area.removeFromTop (sectionHeight));
+
+    area.removeFromTop (gap);
+    voicingSection.setBounds (area.removeFromTop (sectionHeight));
 
     area.removeFromTop (gap);
     auto bottomRow = area.removeFromTop (sectionHeight);

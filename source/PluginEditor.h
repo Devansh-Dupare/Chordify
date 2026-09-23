@@ -3,6 +3,7 @@
 #include "PluginProcessor.h"
 #include "BinaryData.h"
 #include "melatonin_inspector/melatonin_inspector.h"
+#include "ui/ChordKeyboard.h"
 #include "ui/Widgets.h"
 
 //==============================================================================
@@ -34,9 +35,12 @@ private:
 
     // Sections
     ui::Section chordSection { "Chord" }, voicingSection { "Voicing" }, resonanceSection { "Resonance" }, outputSection { "Output" };
-    ui::Stack chordChoices;
-    ui::Choice chordSource, chordType, timbre;
-    ui::Knob root, harmonics, brightness, detune, spread;
+    ui::Stack chordControls;
+    ui::Choice chordSource, timbre;
+    ui::ChordKeyboard keyboard;
+    ui::OctaveButtons octaveButtons { keyboard };
+    ui::ChordTypeButtons chordTypeButtons;
+    ui::Knob harmonics, brightness, detune, spread;
     ui::Knob decay, glide, excite;
     ui::Knob inputHpf, tone, mix, output;
 
