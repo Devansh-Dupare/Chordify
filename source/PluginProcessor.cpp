@@ -27,6 +27,7 @@ PluginProcessor::ParameterValues::ParameterValues (juce::AudioProcessorValueTree
       spread (*tree.getRawParameterValue (params::id::spread)),
       glide (*tree.getRawParameterValue (params::id::glide)),
       decay (*tree.getRawParameterValue (params::id::decay)),
+      excite (*tree.getRawParameterValue (params::id::excite)),
       brightness (*tree.getRawParameterValue (params::id::brightness)),
       timbre (*tree.getRawParameterValue (params::id::timbre)),
       mix (*tree.getRawParameterValue (params::id::mix))
@@ -109,10 +110,12 @@ void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
         word.store (0, std::memory_order_relaxed);
 
     resonatorBank.prepare (sampleRate);
+    exciter.setAmount (parameterValues.excite.load() / 100.0f);
+    exciter.prepare (sampleRate);
     setLatencySamples (engine->getLatencySamples());
 
     midiVoices.reset();
-    internalVoices = {};
+    chordVoices = {};
     lastPartialInputs.reset();
 
     // Hosts may send larger blocks than announced; renderSegment splits those into pieces this size
@@ -196,14 +199,27 @@ void PluginProcessor::updateEngine()
     const auto& p = parameterValues;
 
     PartialInputs inputs;
-    if ((params::ChordSource) juce::roundToInt (p.chordSource.load()) == params::ChordSource::midi)
+    const auto chordType = juce::roundToInt (p.chordType.load());
+
+    switch ((params::ChordSource) juce::roundToInt (p.chordSource.load()))
     {
-        inputs.voices = midiVoices.getVoices();
-    }
-    else
-    {
-        internalVoices = chordify::internalChord (juce::roundToInt (p.root.load()), juce::roundToInt (p.chordType.load()), internalVoices);
-        inputs.voices = internalVoices;
+        case params::ChordSource::midi:
+            inputs.voices = midiVoices.getVoices();
+            break;
+
+        case params::ChordSource::midiRoot:
+            if (const auto root = midiVoices.lastHeldNote())
+                chordVoices = chordify::internalChord (*root, chordType, chordVoices);
+            else
+                chordVoices = chordify::releaseAll (chordVoices); // no key held: let the chord ring out
+            inputs.voices = chordVoices;
+            break;
+
+        case params::ChordSource::internal:
+        default:
+            chordVoices = chordify::internalChord ((float) juce::roundToInt (p.root.load()), chordType, chordVoices);
+            inputs.voices = chordVoices;
+            break;
     }
 
     inputs.settings.numHarmonics = juce::roundToInt (p.harmonics.load());
@@ -219,6 +235,7 @@ void PluginProcessor::updateEngine()
         lastPartialInputs = inputs;
     }
 
+    exciter.setAmount (p.excite.load() / 100.0f);
     engine->setDecay (p.decay.load());
     engine->setGlide (p.glide.load() / 1000.0f);
     mixSmoothed.setTargetValue (p.mix.load() / 100.0f);
@@ -246,6 +263,8 @@ void PluginProcessor::renderSegment (juce::AudioBuffer<float>& buffer, int start
         monoInput.clear (0, 0, n);
         for (int ch = 0; ch < numInputs; ++ch)
             juce::FloatVectorOperations::addWithMultiply (mono, buffer.getReadPointer (ch, first), 1.0f / (float) numInputs, n);
+
+        exciter.process (mono, mono, n);
 
         engine->process (mono, wetLeft, wetRight, n);
 

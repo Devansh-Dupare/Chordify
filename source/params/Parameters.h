@@ -19,6 +19,7 @@ namespace params
         inline constexpr auto brightness = "brightness";
         inline constexpr auto timbre = "timbre";
         inline constexpr auto glide = "glide";
+        inline constexpr auto excite = "excite";
         inline constexpr auto mix = "mix";
         inline constexpr auto inputHpf = "inputHpf";
         inline constexpr auto tone = "tone";
@@ -33,12 +34,13 @@ namespace params
     enum class ChordSource
     {
         internal, // root + chordType parameters
-        midi      // notes held in the host's MIDI track
+        midi,     // notes held in the host's MIDI track, one chord tone per key
+        midiRoot  // the last key held sets the root; chordType builds the chord on it
     };
 
     // Choice lists; the order is part of the saved state, so only ever append
     inline const juce::StringArray engineNames { "Resonator", "Spectral" };
-    inline const juce::StringArray chordSourceNames { "Internal", "MIDI" };
+    inline const juce::StringArray chordSourceNames { "Internal", "MIDI", "MIDI Root" };
     inline const juce::StringArray timbreNames { "All Harmonics", "Odd Harmonics" };
     inline const juce::StringArray chordTypeNames { "Major", "Minor", "Diminished", "Augmented", "Sus2", "Sus4", "Major 7", "Minor 7", "Dominant 7", "Power" };
 

@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "dsp/ChordMapper.h"
+#include "dsp/Exciter.h"
 #include "dsp/ResonatorBank.h"
 #include "params/Parameters.h"
 #include <bitset>
@@ -66,6 +67,7 @@ private:
         std::atomic<float>& spread;
         std::atomic<float>& glide;
         std::atomic<float>& decay;
+        std::atomic<float>& excite;
         std::atomic<float>& brightness;
         std::atomic<float>& timbre;
         std::atomic<float>& mix;
@@ -76,8 +78,9 @@ private:
     chordify::ResonatorBank resonatorBank;
     chordify::Engine* engine = &resonatorBank;
 
+    chordify::Exciter exciter;
     chordify::VoiceAllocator midiVoices;
-    chordify::Voices internalVoices {};
+    chordify::Voices chordVoices {}; // last chord built from root + chord type (Internal / MIDI Root)
 
     // Partials are only recomputed when the chord or voicing actually changes
     struct PartialInputs

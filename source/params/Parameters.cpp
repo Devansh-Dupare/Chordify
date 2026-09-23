@@ -68,6 +68,9 @@ namespace params
         layout.add (std::make_unique<juce::AudioParameterFloat> (pid (id::decay), "Decay",
             skewedRange (0.05f, 10.0f, 1.0f), 1.5f, withUnit ("s", 2)));
 
+        layout.add (std::make_unique<juce::AudioParameterFloat> (pid (id::excite), "Excite",
+            juce::NormalisableRange<float> { 0.0f, 100.0f }, 100.0f, withUnit ("%", 0)));
+
         // Timbre
         layout.add (std::make_unique<juce::AudioParameterFloat> (pid (id::brightness), "Brightness",
             juce::NormalisableRange<float> { 0.0f, 100.0f }, 50.0f, withUnit ("%", 0)));

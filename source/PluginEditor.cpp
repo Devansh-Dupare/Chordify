@@ -66,7 +66,7 @@ PluginEditor::PluginEditor (PluginProcessor& p)
         addAndMakeVisible (*choices.emplace_back (std::make_unique<Choice> (tree, paramId)));
 
     for (auto* paramId : { params::id::root, params::id::harmonics, params::id::detune, params::id::spread, params::id::glide, params::id::decay,
-             params::id::brightness, params::id::inputHpf, params::id::tone, params::id::mix })
+             params::id::excite, params::id::brightness, params::id::inputHpf, params::id::tone, params::id::mix })
         addAndMakeVisible (*knobs.emplace_back (std::make_unique<Knob> (tree, paramId)));
 
     midiNotesLabel.setJustificationType (juce::Justification::centredLeft);
