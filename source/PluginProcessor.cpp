@@ -78,25 +78,29 @@ double PluginProcessor::getTailLengthSeconds() const
 
 int PluginProcessor::getNumPrograms()
 {
-    return 1;   // NB: some hosts don't cope very well if you tell them there are 0 programs,
-                // so this should be at least 1, even if you're not really implementing programs.
+    return (int) params::factoryPresets().size();
 }
 
 int PluginProcessor::getCurrentProgram()
 {
-    return 0;
+    return currentProgram;
 }
 
 void PluginProcessor::setCurrentProgram (int index)
 {
-    juce::ignoreUnused (index);
+    const auto& presets = params::factoryPresets();
+    if (index < 0 || index >= (int) presets.size())
+        return;
+
+    currentProgram = index;
+    params::applyPreset (parameters, presets[(size_t) index]);
+    parameters.state.setProperty (programProperty, index, nullptr);
 }
 
 const juce::String PluginProcessor::getProgramName (int index)
 {
-    juce::ignoreUnused (index);
-    // Steinberg's VST3 validator fails plugins whose single default program has no name
-    return "Default";
+    const auto& presets = params::factoryPresets();
+    return index >= 0 && index < (int) presets.size() ? presets[(size_t) index].name : juce::String();
 }
 
 void PluginProcessor::changeProgramName (int index, const juce::String& newName)
@@ -411,7 +415,10 @@ void PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
 void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     if (const auto xml = getXmlFromBinary (data, sizeInBytes); xml != nullptr && xml->hasTagName (parameters.state.getType()))
+    {
         parameters.replaceState (juce::ValueTree::fromXml (*xml));
+        currentProgram = parameters.state.getProperty (programProperty, 0);
+    }
 }
 
 //==============================================================================

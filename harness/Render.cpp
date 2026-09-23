@@ -18,8 +18,9 @@ namespace
   --block   <n>                                  processing block size (default: 512)
   --gain    <db>                                 level of generated signal (default: -12)
   --notes   <n,n,...>                            MIDI notes held for the whole render, e.g. 60,64,67
+  --preset  <index|name>                         load a factory preset first (--set still overrides)
   --set     <paramID>=<value>                    set a parameter (real-world value), repeatable
-  --list                                         list the plugin's parameters and exit
+  --list                                         list the plugin's parameters and presets, then exit
 )";
 
     struct Options
@@ -31,6 +32,7 @@ namespace
         int blockSize = 512;
         float gainDb = -12.0f;
         juce::Array<int> notes;
+        juce::String preset;
         juce::StringPairArray params;
         bool listParams = false;
     };
@@ -72,6 +74,8 @@ namespace
                     throw std::runtime_error ("--set expects paramID=value");
                 o.params.set (kv.upToFirstOccurrenceOf ("=", false, false), kv.fromFirstOccurrenceOf ("=", false, false));
             }
+            else if (arg == "--preset")
+                o.preset = next();
             else if (arg == "--list")
                 o.listParams = true;
             else if (arg == "--help" || arg == "-h")
@@ -179,6 +183,9 @@ namespace
                 if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (p))
                     std::cout << ranged->getParameterID() << "  \"" << ranged->getName (64) << "\"  default "
                               << ranged->getCurrentValueAsText() << "\n";
+            std::cout << "\npresets:\n";
+            for (int i = 0; i < processor.getNumPrograms(); ++i)
+                std::cout << "  " << i << "  " << processor.getProgramName (i) << "\n";
             return 0;
         }
 
@@ -186,6 +193,17 @@ namespace
         const juce::File inputFile = juce::File::getCurrentWorkingDirectory().getChildFile (o.input);
         auto input = inputFile.existsAsFile() ? readFile (inputFile, sampleRate) : generateSignal (o);
         const auto numSamples = input.getNumSamples();
+
+        if (o.preset.isNotEmpty())
+        {
+            auto index = o.preset.containsOnly ("0123456789") ? o.preset.getIntValue() : -1;
+            for (int i = 0; i < processor.getNumPrograms() && index < 0; ++i)
+                if (processor.getProgramName (i).equalsIgnoreCase (o.preset))
+                    index = i;
+            if (index < 0 || index >= processor.getNumPrograms())
+                throw std::runtime_error ("unknown preset " + o.preset.toStdString() + " (see --list)");
+            processor.setCurrentProgram (index);
+        }
 
         for (const auto& id : o.params.getAllKeys())
         {

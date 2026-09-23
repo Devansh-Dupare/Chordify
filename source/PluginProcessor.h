@@ -6,6 +6,7 @@
 #include "dsp/ResonatorBank.h"
 #include "dsp/ToneFilters.h"
 #include "params/Parameters.h"
+#include "params/Presets.h"
 #include <bitset>
 
 #if (MSVC)
@@ -64,6 +65,10 @@ private:
     void renderSegment (juce::AudioBuffer<float>& buffer, int start, int numSamples);
 
     juce::AudioProcessorValueTreeState parameters { *this, nullptr, "Chordify", params::createLayout() };
+
+    // Last factory preset chosen, saved with the state so hosts show the right name
+    static inline const juce::Identifier programProperty { "program" };
+    int currentProgram = 0;
 
     struct ParameterValues
     {
