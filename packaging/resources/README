@@ -1,5 +1,15 @@
-Thanks for installing!
+Chordify by Duphon
 
-This plugin was made with the Pamplejuce template.
+Chordify turns any sound into a chord. Pick notes on its keyboard, save chords into eight slots, and whatever you feed it (drums, voice, noise, pads) comes out playing that chord.
 
-TODO: Update this text with what you want to show up in your macOS installer.
+This installer can add:
+
+  - VST3 plug-in      /Library/Audio/Plug-Ins/VST3/Chordify.vst3
+  - Audio Unit        /Library/Audio/Plug-Ins/Components/Chordify.component
+  - Standalone app    /Applications/Chordify.app
+
+Choose "Customize" on the next screens to install only some of them. Installing a newer version replaces the old one in place.
+
+After installing, rescan plug-ins in your DAW if Chordify doesn't show up. The standalone app will ask for microphone access the first time it runs, because it processes your audio input.
+
+To uninstall, delete the files listed above (or run the "Uninstall Chordify" script that came with this installer).

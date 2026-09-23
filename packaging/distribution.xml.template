@@ -1,36 +1,36 @@
 <?xml version='1.0' encoding='utf8'?>
+<!-- productbuild distribution for the macOS installer. build_macos_installer.sh fills in the
+     ${...} values; every format is a separate, optional choice. -->
 <installer-gui-script minSpecVersion="2">
-    <title>${PRODUCT_NAME}</title>
+    <title>${PRODUCT_NAME} ${VERSION}</title>
     <allowed-os-versions>
-        <os-version min="10.13" />
+        <os-version min="10.14" />
     </allowed-os-versions>
     <license file="EULA" />
     <readme file="README" />
     <background file="background.png" mime-type="image/png" scaling="tofit" alignment="bottomleft"/>
-    <background-darkAqua file="background.png" mime-type="image/png" scaling="tofit" alignment="bottomleft"/>
+    <background-darkAqua file="background-dark.png" mime-type="image/png" scaling="tofit" alignment="bottomleft"/>
     <options customize="always" rootVolumeOnly="true" hostArchitectures="x86_64,arm64" />
     <domain enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true" />
 
     <choices-outline>
-        <line choice="app" />
         <line choice="vst3" />
         <line choice="au" />
-        <line choice="clap" />
+        <line choice="app" />
     </choices-outline>
 
-    <choice id="app" visible="true" start_selected="true" title="${PRODUCT_NAME} Standalone">
-        <pkg-ref id="${BUNDLE_ID}.app.pkg" version="${VERSION}" onConclusion="none">${PRODUCT_NAME}.app.pkg</pkg-ref>
-    </choice>
-
-    <choice id="vst3" visible="true" start_selected="true" title="${PRODUCT_NAME} VST3">
+    <choice id="vst3" visible="true" start_selected="true" title="VST3 plug-in"
+            description="Installs ${PRODUCT_NAME}.vst3 in /Library/Audio/Plug-Ins/VST3">
         <pkg-ref id="${BUNDLE_ID}.vst3.pkg" version="${VERSION}" onConclusion="none">${PRODUCT_NAME}.vst3.pkg</pkg-ref>
     </choice>
 
-    <choice id="au" visible="true" start_selected="true" title="${PRODUCT_NAME} AU">
+    <choice id="au" visible="true" start_selected="true" title="Audio Unit plug-in"
+            description="Installs ${PRODUCT_NAME}.component in /Library/Audio/Plug-Ins/Components (Logic Pro, GarageBand, ...)">
         <pkg-ref id="${BUNDLE_ID}.au.pkg" version="${VERSION}" onConclusion="none">${PRODUCT_NAME}.au.pkg</pkg-ref>
     </choice>
 
-    <choice id="clap" visible="true" start_selected="true" title="${PRODUCT_NAME} CLAP">
-        <pkg-ref id="${BUNDLE_ID}.clap.pkg" version="${VERSION}" onConclusion="none">${PRODUCT_NAME}.clap.pkg</pkg-ref>
+    <choice id="app" visible="true" start_selected="true" title="Standalone app"
+            description="Installs ${PRODUCT_NAME}.app in /Applications">
+        <pkg-ref id="${BUNDLE_ID}.app.pkg" version="${VERSION}" onConclusion="none">${PRODUCT_NAME}.app.pkg</pkg-ref>
     </choice>
 </installer-gui-script>

@@ -119,7 +119,7 @@ void PluginEditor::layoutBody()
     background.setBounds (0, 0, baseWidth, baseHeight);
 
     // Top: brand, the LCD, presets
-    const juce::Rectangle<int> brand (margin + 4, topY + 8, 210, 64);
+    const juce::Rectangle<int> brand (margin + 2, topY + 14, 230, 56);
     display.setBounds (margin + 240, topY, 516, topHeight);
     const juce::Rectangle<int> presetLabel (baseWidth - margin - 180, topY + 10, 180, 16);
     presetBox.setBounds (baseWidth - margin - 180, topY + 30, 180, 34);

@@ -83,12 +83,12 @@ Use a Release build for meaningful CPU numbers.
 - `tests/` - Catch2 test files
 - `source/dsp/` - JUCE-free DSP: `Resonator` (single TPT SVF, reference maths), `ResonatorBank` (the engine), `ChordMapper` (chord notes → voices → partial grid), `Exciter` (input → envelope-following noise)
 - `source/state/` - `ChordSlots`: the piano selection and 8 saved slots
-- `harness/` - `Render` offline render CLI (see Render Harness)
+- `harness/` - `Render` offline render CLI (see Render Harness) and `MakeArt` (exports every icon/installer image from `source/ui/Logo.cpp`)
+- `packaging/` - logo exports, macOS/Windows installer scripts; see `packaging/INSTALLERS.md`
 - `benchmarks/` - Catch2 benchmark files
 - `cmake/` - CMake modules (Tests.cmake, Benchmarks.cmake, Assets.cmake, etc.)
 - `modules/` - Git submodules: clap-juce-extensions, melatonin_inspector
 - `JUCE/` - JUCE framework (git submodule)
-- `assets/` - Binary resources (auto-included via juce_add_binary_data)
 - `packaging/` - Installer resources and scripts
 
 ## Architecture
@@ -116,7 +116,7 @@ Use a Release build for meaningful CPU numbers.
 - `PamplejuceIPP.cmake` - Intel IPP integration (optional)
 
 Target setup happens via explicit function calls in `CMakeLists.txt`, not at include time:
-- `pamplejuce_add_assets()` - Includes all files in assets/ as binary data (from `Assets.cmake`)
+- `pamplejuce_add_assets()` - Includes all files in assets/ as binary data (from `Assets.cmake`); not used by Chordify
 - `pamplejuce_add_tests()` - Configures the Catch2 test target (from `Tests.cmake`)
 - `pamplejuce_add_benchmarks()` - Configures the Catch2 benchmark target (from `Benchmarks.cmake`)
 - `pamplejuce_shared_code_defaults()` - C++23, fast math (from `SharedCodeDefaults.cmake`)
@@ -191,3 +191,11 @@ Some useful CPM libraries:
 ## Code Style
 
 Uses `.clang-format` with Allman-style braces, 4-space indentation, no column limit.
+
+## Branding & Installers
+
+- The logo is code (`source/ui/Logo.cpp`): the editor draws it live and `MakeArt` exports `packaging/icon.png` / `icon_small.png` (JUCE's `ICON_BIG`/`ICON_SMALL`), `.icns`, `.ico`, installer art and marketing PNGs. Change the logo there and re-run MakeArt; never edit the exported images by hand.
+- `packaging/build_macos_installer.sh` builds a Universal Release and a `.pkg` (VST3, AU, app; components non-relocatable). It signs/notarizes only when `DEVELOPER_ID_APPLICATION`, `DEVELOPER_ID_INSTALLER`, `NOTARY_PROFILE` are set; the user hasn't set up signing yet.
+- `packaging/installer.iss` + `build_windows_installer.bat` are the Windows installer; written on macOS and **untested**. Keep `AppId` unchanged.
+- The standalone app has microphone permission + hardened runtime (audio-input entitlement) in `juce_add_plugin`; without the usage description macOS denies it audio input.
+- There is no `assets/` BinaryData target any more (removed with the template's placeholder image).

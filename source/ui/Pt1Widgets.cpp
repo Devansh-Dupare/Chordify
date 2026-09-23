@@ -1,4 +1,5 @@
 #include "Pt1Widgets.h"
+#include "Logo.h"
 #include "Pt1LookAndFeel.h"
 
 namespace pt1
@@ -111,19 +112,9 @@ namespace pt1
             g.drawText (item.text, item.area, juce::Justification::centredLeft, true);
         }
 
-        // Model name, printed like the lettering on the real case rather than a logo lockup
+        // The logo, printed like the model name on the real case rather than a large lockup
         if (! brand.isEmpty())
-        {
-            auto area = brand.toFloat();
-            g.setColour (colours::ink);
-            g.setFont (printFont (30.0f));
-            g.drawText ("Chordify", area.removeFromTop (area.getHeight() * 0.58f), juce::Justification::bottomLeft, false);
-            g.setColour (colours::accent);
-            g.fillRect (area.removeFromTop (5.0f).withTrimmedTop (2.0f).withWidth (132.0f));
-            g.setColour (colours::inkDim);
-            g.setFont (printFont (10.0f));
-            g.drawText ("CHORD RESONATOR  " + juce::String::fromUTF8 ("\xc2\xb7") + "  DUPHON", area, juce::Justification::centredLeft, false);
-        }
+            logo::drawWordmark (g, brand.toFloat());
 
         // Faux screws in the corners
         constexpr float inset = 9.0f;

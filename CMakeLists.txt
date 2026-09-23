@@ -68,8 +68,10 @@ add_subdirectory (modules/melatonin_inspector)
 
 # See `docs/CMake API.md` in the JUCE repo for all config options
 juce_add_plugin("${PROJECT_NAME}"
-    # Icons for the standalone app
+    # Icons for the standalone app, exported from source/ui/Logo.cpp by the MakeArt tool.
+    # JUCE builds the app's .icns/.ico from these; the small one is used for 16-48 px sizes.
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/packaging/icon.png"
+    ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/packaging/icon_small.png"
 
     # Change me!
     COMPANY_NAME "${COMPANY_NAME}"
@@ -87,6 +89,14 @@ juce_add_plugin("${PROJECT_NAME}"
     # A unique four-character plugin id
     # Note: this must have at least one upper-case character
     PLUGIN_CODE Chfy
+
+    # The standalone app processes live input, so it needs microphone access (macOS asks the user
+    # once, with this text). Hardened runtime plus the audio-input entitlement is what
+    # notarization requires; JUCE writes the entitlements file the installer script signs with.
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    MICROPHONE_PERMISSION_TEXT "Chordify turns the sound coming into your audio input into chords."
+    HARDENED_RUNTIME_ENABLED TRUE
+    HARDENED_RUNTIME_OPTIONS com.apple.security.device.audio-input
 
     # A plain audio effect: chords come from the on-screen piano and slots, not MIDI
     NEEDS_MIDI_INPUT FALSE
@@ -120,9 +130,6 @@ pamplejuce_shared_code_defaults()
 file(GLOB_RECURSE SourceFiles CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/source/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/source/*.h")
 target_sources(SharedCode INTERFACE ${SourceFiles})
 
-# Adds a BinaryData target for embedding assets into the binary
-pamplejuce_add_assets()
-
 # MacOS only: Cleans up folder and target organization on Xcode.
 pamplejuce_xcode_prettify()
 
@@ -153,7 +160,6 @@ target_compile_definitions(SharedCode
 # This allows the JUCE plugin targets and the Tests target to link against it
 target_link_libraries(SharedCode
     INTERFACE
-    Assets
     melatonin_inspector
     juce_audio_utils
     juce_audio_processors
@@ -182,6 +188,13 @@ add_executable(Render harness/Render.cpp)
 target_include_directories(Render PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/source")
 target_compile_definitions(Render PRIVATE $<TARGET_PROPERTY:${PROJECT_NAME},COMPILE_DEFINITIONS>)
 target_link_libraries(Render PRIVATE SharedCode)
+
+# Exports every logo, icon and installer image from source/ui/Logo.cpp
+# Usage: ./cmake-build-debug/MakeArt packaging
+add_executable(MakeArt harness/MakeArt.cpp)
+target_include_directories(MakeArt PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/source")
+target_compile_definitions(MakeArt PRIVATE $<TARGET_PROPERTY:${PROJECT_NAME},COMPILE_DEFINITIONS>)
+target_link_libraries(MakeArt PRIVATE SharedCode)
 
 # Output some config for CI (like our PRODUCT_NAME)
 include(GitHubENV)

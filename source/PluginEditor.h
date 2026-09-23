@@ -1,7 +1,6 @@
 #pragma once
 
 #include "PluginProcessor.h"
-#include "BinaryData.h"
 #include "melatonin_inspector/melatonin_inspector.h"
 #include "ui/ChordKeyboard.h"
 #include "ui/Pt1LookAndFeel.h"

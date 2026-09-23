@@ -30,3 +30,7 @@ cmake-build-relwithdebinfo
 packaging/Output/*
 # Render harness output
 renders/
+
+# Installer build folders
+cmake-build-installer
+build-installer
