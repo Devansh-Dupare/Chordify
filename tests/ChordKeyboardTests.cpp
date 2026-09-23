@@ -107,6 +107,17 @@ TEST_CASE ("Piano keyboard writes the parameters", "[keyboard]")
         CHECK (keyboard.getHighlightedRoot() == 53);
     }
 
+    SECTION ("clicking keys in the upper octave doesn't scroll the keyboard")
+    {
+        REQUIRE (keyboard.getLowestNote() == 48); // showing C2 - B3
+        keyboard.selectRoot (71);                 // B3, the last key
+        CHECK (keyboard.getLowestNote() == 48);
+        keyboard.selectRoot (60);                 // C3
+        CHECK (keyboard.getLowestNote() == 48);
+        keyboard.selectRoot (49);
+        CHECK (keyboard.getLowestNote() == 48);
+    }
+
     SECTION ("selecting a key in a MIDI mode switches back to Internal")
     {
         setValue (plugin, params::id::chordSource, (float) params::ChordSource::midi);
@@ -119,6 +130,7 @@ TEST_CASE ("Piano keyboard writes the parameters", "[keyboard]")
     {
         keyboard.shiftOctave (1);
         CHECK (juce::roundToInt (valueOf (plugin, params::id::root)) == 60);
+        CHECK (keyboard.getLowestNote() == 60); // the view moves with it
         keyboard.shiftOctave (-1);
         keyboard.shiftOctave (-1);
         CHECK (juce::roundToInt (valueOf (plugin, params::id::root)) == 36);

@@ -47,7 +47,14 @@ namespace ui
     {
         std::bitset<128> notes;
         int newRoot = -1;
-        int newWindowStart = 12 * (root / 12);
+
+        // Only scroll when a note would be off screen, and then put its octave first. Otherwise
+        // clicking a key in the upper octave would scroll the keyboard out from under the mouse.
+        auto newWindowStart = windowStart;
+        const auto keepVisible = [&newWindowStart] (int note) {
+            if (note < newWindowStart || note >= newWindowStart + numKeys)
+                newWindowStart = 12 * (note / 12);
+        };
 
         if ((params::ChordSource) source == params::ChordSource::internal)
         {
@@ -56,6 +63,7 @@ namespace ui
                 if (root + interval < 128)
                     notes[(size_t) (root + interval)] = true;
             newRoot = root;
+            keepVisible (root);
         }
         else if (soundingChord != nullptr)
         {
@@ -63,18 +71,18 @@ namespace ui
             notes = sounding.notes;
             newRoot = sounding.root;
 
-            // Follow the sounding chord so it stays on screen
+            // Keep the sounding chord's lowest note on screen
             for (int note = 0; note < 128; ++note)
             {
                 if (notes[(size_t) note])
                 {
-                    newWindowStart = 12 * (note / 12);
+                    keepVisible (note);
                     break;
                 }
             }
         }
 
-        newWindowStart = std::clamp (newWindowStart, 0, 127 - numKeys);
+        newWindowStart = std::clamp (newWindowStart, 0, 12 * ((127 - numKeys) / 12)); // always starts on a C
 
         if (notes != highlighted || newRoot != highlightedRoot || newWindowStart != windowStart)
         {
@@ -110,8 +118,16 @@ namespace ui
     {
         const auto range = rootParam.getNormalisableRange();
         const auto shifted = root + 12 * direction;
-        if (shifted >= (int) range.start && shifted <= (int) range.end)
-            rootAttachment.setValueAsCompleteGesture ((float) shifted);
+        if (shifted < (int) range.start || shifted > (int) range.end)
+            return;
+
+        // Scroll with the root, so the chord keeps its place on screen
+        windowStart = std::clamp (windowStart + 12 * direction, 0, 12 * ((127 - numKeys) / 12));
+        if (onWindowChanged != nullptr)
+            onWindowChanged();
+
+        rootAttachment.setValueAsCompleteGesture ((float) shifted);
+        repaint();
     }
 
     //==============================================================================
