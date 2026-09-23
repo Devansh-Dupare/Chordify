@@ -87,9 +87,10 @@ void PluginProcessor::changeProgramName (int index, const juce::String& newName)
 //==============================================================================
 void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    // Use this method as the place to do any pre-playback
-    // initialisation that you need..
     juce::ignoreUnused (sampleRate, samplesPerBlock);
+
+    for (auto& word : heldNotes)
+        word.store (0, std::memory_order_relaxed);
 }
 
 void PluginProcessor::releaseResources()
@@ -123,33 +124,47 @@ bool PluginProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                                               juce::MidiBuffer& midiMessages)
 {
-    juce::ignoreUnused (midiMessages);
-
     juce::ScopedNoDenormals noDenormals;
     auto totalNumInputChannels  = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
 
-    // In case we have more outputs than inputs, this code clears any output
-    // channels that didn't contain input data, (because these aren't
-    // guaranteed to be empty - they may contain garbage).
-    // This is here to avoid people getting screaming feedback
-    // when they first compile a plugin, but obviously you don't need to keep
-    // this code if your algorithm always overwrites all the output channels.
+    // Clear any output channels that didn't contain input data (they may contain garbage)
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
-    // This is the place where you'd normally do the guts of your plugin's
-    // audio processing...
-    // Make sure to reset the state if your inner loop is processing
-    // the samples and the outer loop is handling the channels.
-    // Alternatively, you can process the samples with the channels
-    // interleaved by keeping the same state.
-    for (int channel = 0; channel < totalNumInputChannels; ++channel)
+    updateHeldNotes (midiMessages);
+
+    // Phase 2: audio passes through untouched. The resonator bank arrives in Phase 3.
+}
+
+void PluginProcessor::updateHeldNotes (const juce::MidiBuffer& midi)
+{
+    for (const auto metadata : midi)
     {
-        auto* channelData = buffer.getWritePointer (channel);
-        juce::ignoreUnused (channelData);
-        // ..do something to the data...
+        const auto message = metadata.getMessage();
+        const auto note = message.getNoteNumber();
+        const auto bit = std::uint64_t { 1 } << (note % 64);
+
+        if (message.isNoteOn())
+            heldNotes[(size_t) note / 64].fetch_or (bit, std::memory_order_relaxed);
+        else if (message.isNoteOff())
+            heldNotes[(size_t) note / 64].fetch_and (~bit, std::memory_order_relaxed);
+        else if (message.isAllNotesOff() || message.isAllSoundOff())
+            for (auto& word : heldNotes)
+                word.store (0, std::memory_order_relaxed);
     }
+}
+
+std::bitset<128> PluginProcessor::getHeldNotes() const
+{
+    std::bitset<128> notes;
+    for (size_t word = 0; word < heldNotes.size(); ++word)
+    {
+        const auto bits = heldNotes[word].load (std::memory_order_relaxed);
+        for (size_t i = 0; i < 64; ++i)
+            notes[word * 64 + i] = ((bits >> i) & 1) != 0;
+    }
+    return notes;
 }
 
 //==============================================================================
@@ -166,17 +181,14 @@ juce::AudioProcessorEditor* PluginProcessor::createEditor()
 //==============================================================================
 void PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    // You should use this method to store your parameters in the memory block.
-    // You could do that either as raw data, or use the XML or ValueTree classes
-    // as intermediaries to make it easy to save and load complex data.
-    juce::ignoreUnused (destData);
+    if (const auto xml = parameters.copyState().createXml())
+        copyXmlToBinary (*xml, destData);
 }
 
 void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    // You should use this method to restore your parameters from this memory block,
-    // whose contents will have been created by the getStateInformation() call.
-    juce::ignoreUnused (data, sizeInBytes);
+    if (const auto xml = getXmlFromBinary (data, sizeInBytes); xml != nullptr && xml->hasTagName (parameters.state.getType()))
+        parameters.replaceState (juce::ValueTree::fromXml (*xml));
 }
 
 //==============================================================================

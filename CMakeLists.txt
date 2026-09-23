@@ -87,6 +87,11 @@ juce_add_plugin("${PROJECT_NAME}"
     # A unique four-character plugin id
     # Note: this must have at least one upper-case character
     PLUGIN_CODE Chfy
+
+    # An audio effect that also receives MIDI, so the host can route chord notes to it
+    NEEDS_MIDI_INPUT TRUE
+    IS_SYNTH FALSE
+    IS_MIDI_EFFECT FALSE
     FORMATS "${FORMATS}"
 
     # The name of your final executable

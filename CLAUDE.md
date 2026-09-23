@@ -53,7 +53,7 @@ On macOS for universal binary: `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"`
 
 ```bash
 # AU
-auval -v aufx Chfy Duph
+auval -v aumf Chfy Duph   # aumf = music effect (audio effect that receives MIDI)
 
 # VST3 + AU via pluginval (installed at ~/Applications/pluginval.app)
 PV=~/Applications/pluginval.app/Contents/MacOS/pluginval
@@ -78,6 +78,7 @@ Use a Release build for meaningful CPU numbers.
 ## Project Structure
 
 - `source/` - Plugin source code (PluginProcessor, PluginEditor)
+- `source/params/` - Parameter IDs and `AudioProcessorValueTreeState` layout. IDs and choice-list order are saved in sessions — never rename/reorder, only append
 - `tests/` - Catch2 test files
 - `harness/` - `Render` offline render CLI (see Render Harness)
 - `benchmarks/` - Catch2 benchmark files

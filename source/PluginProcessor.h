@@ -1,6 +1,8 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include "params/Parameters.h"
+#include <bitset>
 
 #if (MSVC)
 #include "ipps.h"
@@ -38,6 +40,18 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
+    juce::AudioProcessorValueTreeState& getParameterTree() { return parameters; }
+
+    // Notes currently held on the incoming MIDI stream. Safe to call from any thread.
+    std::bitset<128> getHeldNotes() const;
+
 private:
+    void updateHeldNotes (const juce::MidiBuffer& midi);
+
+    juce::AudioProcessorValueTreeState parameters { *this, nullptr, "Chordify", params::createLayout() };
+
+    // Written by the audio thread, read by the UI: bit n of word n / 64 is MIDI note n
+    std::array<std::atomic<std::uint64_t>, 2> heldNotes {};
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };
